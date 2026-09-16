@@ -335,7 +335,11 @@ import {
 	preparePiToolRemovalMeasurements,
 } from "./native-replay-state-pi";
 import { hasVisibleNoteReadCallPi } from "./note-visibility-pi";
-import { PI_CONTEXT_BUDGET, PiContextDeadlineError } from "./pi-context-budget";
+import {
+	PiContextBudget,
+	PI_CONTEXT_BUDGET,
+	PiContextDeadlineError,
+} from "./pi-context-budget";
 import {
 	resolvePiUsableContextLimit,
 	resolvePiWindowGeometry,
@@ -4145,7 +4149,7 @@ function loadPiHistorianStateSnapshot(
 export function registerPiContextHandler(
 	pi: ExtensionAPI,
 	baseOptions: PiContextHandlerOptions,
-): void {
+): { runContextPass: (event: ContextEvent, ctx: ExtensionContext) => Promise<{ messages: ContextEvent["messages"] } | undefined> } {
 	const tagger = createTagger();
 	const lkgCoordinator = createPiLkgCoordinator(
 		baseOptions.db,
@@ -7012,9 +7016,21 @@ export function registerPiContextHandler(
 			);
 		},
 	});
+	// A bound child is served by the registry facade, never through Pi's `context`
+	// hook: the facade hands a foreign ctx straight to this pass, so it must carry
+	// the budget the guarded registration would otherwise build around it.
+	const runContextPass = async (
+		event: ContextEvent,
+		ctx: ExtensionContext,
+	): Promise<{ messages: ContextEvent["messages"] } | undefined> => {
+		const budget = new PiContextBudget();
+		const result = await contextHandler(event, ctx, budget);
+		return result as { messages: ContextEvent["messages"] } | undefined;
+	};
 	log(
 		"[magic-context][pi] registered context handler (tagging + drops + nudges)",
 	);
+	return { runContextPass };
 }
 
 /**
