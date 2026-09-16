@@ -12,7 +12,7 @@
  * resolve to the hidden ephemeral child session.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ContextDatabase } from "@magic-context/core/features/magic-context/storage";
 import type { PromptSurfaceConfig } from "@magic-context/core/shared/prompt-surface";
 import type { PromptSurfaceRuntime } from "@magic-context/core/shared/prompt-surface-runtime";
@@ -95,7 +95,7 @@ export interface RegisterToolsOptions {
 export function registerMagicContextTools(
 	pi: ExtensionAPI,
 	opts: RegisterToolsOptions,
-): void {
+): Map<string, ToolDefinition> {
 	const resolveProjectIdentity = opts.resolveProjectIdentity
 		? (directory: string) => opts.resolveProjectIdentity?.({ cwd: directory })
 		: undefined;
@@ -122,32 +122,30 @@ export function registerMagicContextTools(
 		),
 	});
 
-	pi.registerTool(
-		surfaceTool(
-			createCtxSearchTool({
-				db: opts.db,
-				ensureProjectRegistered: opts.ensureProjectRegistered,
-				memoryEnabled: opts.memoryEnabled,
-				embeddingEnabled: opts.embeddingEnabled,
-				gitCommitsEnabled: opts.gitCommitsEnabled,
-				resolveProjectIdentity,
-			}),
-		),
+	const ctxSearch = surfaceTool(
+		createCtxSearchTool({
+			db: opts.db,
+			ensureProjectRegistered: opts.ensureProjectRegistered,
+			memoryEnabled: opts.memoryEnabled,
+			embeddingEnabled: opts.embeddingEnabled,
+			gitCommitsEnabled: opts.gitCommitsEnabled,
+			resolveProjectIdentity,
+		}),
 	);
+	pi.registerTool(ctxSearch);
 
+	const ctxMemory = surfaceTool(
+		createCtxMemoryTool({
+			db: opts.db,
+			ensureProjectRegistered: opts.ensureProjectRegistered,
+			memoryEnabled: opts.memoryEnabled,
+			embeddingEnabled: opts.embeddingEnabled,
+			allowDreamerActions: opts.allowDreamerActions ?? false,
+			resolveProjectIdentity,
+		}),
+	);
 	if (opts.memoryToolEnabled !== false) {
-		pi.registerTool(
-			surfaceTool(
-				createCtxMemoryTool({
-					db: opts.db,
-					ensureProjectRegistered: opts.ensureProjectRegistered,
-					memoryEnabled: opts.memoryEnabled,
-					embeddingEnabled: opts.embeddingEnabled,
-					allowDreamerActions: opts.allowDreamerActions ?? false,
-					resolveProjectIdentity,
-				}),
-			),
-		);
+		pi.registerTool(ctxMemory);
 	}
 
 	// ctx_note and ctx_expand are session-scoped: they resolve the CURRENT
@@ -155,19 +153,18 @@ export function registerMagicContextTools(
 	// ephemeral child session, so a note would be orphaned and an expand would
 	// target the child's empty transcript. Omit them for those children; ctx_search
 	// stays available and ctx_memory is controlled above.
+	const ctxNote = surfaceTool(
+		createCtxNoteTool({
+			db: opts.db,
+			dreamerEnabled: opts.dreamerEnabled ?? false,
+			resolveDreamerEnabled: opts.resolveDreamerEnabled,
+			resolveProjectIdentity,
+		}),
+	);
+	const ctxExpand = surfaceTool(createCtxExpandTool({ db: opts.db }));
 	if (!opts.sessionScopedToolsDisabled) {
-		pi.registerTool(
-			surfaceTool(
-				createCtxNoteTool({
-					db: opts.db,
-					dreamerEnabled: opts.dreamerEnabled ?? false,
-					resolveDreamerEnabled: opts.resolveDreamerEnabled,
-					resolveProjectIdentity,
-				}),
-			),
-		);
-
-		pi.registerTool(surfaceTool(createCtxExpandTool({ db: opts.db })));
+		pi.registerTool(ctxNote);
+		pi.registerTool(ctxExpand);
 	}
 
 	if (opts.todowriteEnabled !== false) {
@@ -186,15 +183,25 @@ export function registerMagicContextTools(
 	// ctx_reduce is session-scoped just like ctx_note/ctx_expand: it resolves the
 	// CURRENT session id at call time. Omit it for `--no-session` children where
 	// that id points at a hidden ephemeral child session.
+	const ctxReduce = surfaceTool(
+		createCtxReduceTool({
+			db: opts.db,
+			protectedTags: opts.protectedTags ?? 20,
+			resolveProtectedTags: opts.resolveProtectedTags,
+		}),
+	);
 	if (!opts.sessionScopedToolsDisabled && !opts.compactionOff) {
-		pi.registerTool(
-			surfaceTool(
-				createCtxReduceTool({
-					db: opts.db,
-					protectedTags: opts.protectedTags ?? 20,
-					resolveProtectedTags: opts.resolveProtectedTags,
-				}),
-			),
-		);
+		pi.registerTool(ctxReduce);
 	}
+
+	// v2 ticket 02: the registry needs the definitions, not only the registrations, so a
+	// bound child can be served ctx_search, ctx_reduce and ctx_expand as proxies. Returning
+	// them changes nothing for callers that ignore the result.
+	return new Map<string, ToolDefinition>([
+		[ctxSearch.name, ctxSearch],
+		[ctxMemory.name, ctxMemory],
+		[ctxNote.name, ctxNote],
+		[ctxExpand.name, ctxExpand],
+		[ctxReduce.name, ctxReduce],
+	]);
 }

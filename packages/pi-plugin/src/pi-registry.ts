@@ -16,11 +16,21 @@
  */
 import { log } from "@magic-context/core/shared/logger";
 import type {
+	AgentToolResult,
 	ContextEvent,
 	ExtensionContext,
+	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import {
+	CHILD_TOOL_ALLOWLIST,
+	markReducedSession,
+	unmarkReducedSession,
+} from "./pi-child-mode";
 
-export interface PiMagicContextRegistry {
+export type PiToolResult = AgentToolResult<unknown>;
+
+/** The work an instance supplies. The facade adds the dispatch on top. */
+export interface PiMagicContextWork {
 	transformContext(
 		event: ContextEvent,
 		ctx: ExtensionContext,
@@ -30,10 +40,25 @@ export interface PiMagicContextRegistry {
 	scrubMessage(message: unknown): void;
 	bindChild(input: {
 		childSessionFile?: string;
+		childSessionId?: string;
 		parentSessionFile?: string;
 		cwd?: string;
 	}): void;
 	clearSession(sessionId: string): void;
+}
+
+export interface PiMagicContextRegistry extends PiMagicContextWork {
+	/**
+	 * Runs one allowlisted Magic Context tool on behalf of a bound child. The child's own
+	 * ctx travels with the call, so session-scoped tools resolve to the child's session
+	 * and its search sees the child's own messages plus the project's memories — which is
+	 * exactly what v2 ticket 02 grants, without a second implementation of the scoping.
+	 */
+	runTool(
+		toolName: string,
+		params: Record<string, unknown>,
+		ctx: ExtensionContext,
+	): Promise<PiToolResult>;
 }
 
 const REGISTRY_KEY = Symbol.for("@cortexkit/magic-context:pi-registry");
@@ -41,9 +66,11 @@ const REGISTRY_KEY = Symbol.for("@cortexkit/magic-context:pi-registry");
 interface Registration {
 	dbPath: string;
 	projectDir: string;
-	registry: PiMagicContextRegistry;
+	registry: PiMagicContextWork;
 	/** Sessions this instance was explicitly told it owns. */
 	bound: Set<string>;
+	/** The instance's registered tool definitions, keyed by name (v2 ticket 02). */
+	tools: Map<string, ToolDefinition>;
 }
 
 const registrations = new Set<Registration>();
@@ -90,13 +117,16 @@ function resolve(ctx: unknown): Registration | undefined {
 export function registerPiRegistry(options: {
 	dbPath: string;
 	projectDir: string;
-	registry: PiMagicContextRegistry;
+	registry: PiMagicContextWork;
+	/** The instance's registered tools, so a bound child can be served them. */
+	tools?: Map<string, ToolDefinition>;
 }): () => void {
 	const registration: Registration = {
 		dbPath: options.dbPath,
 		projectDir: options.projectDir,
 		registry: options.registry,
 		bound: new Set(),
+		tools: options.tools ?? new Map(),
 	};
 	registrations.add(registration);
 
@@ -126,8 +156,52 @@ export function registerPiRegistry(options: {
 						? [...registrations]
 						: [];
 			for (const entry of targets) for (const key of keys) entry.bound.add(key);
+			// v2 ticket 02/03: a bound child is served in reduced mode — compaction and the
+			// tag sentence, but none of the parent-oriented prompt surface. The pass decides
+			// by session id, so mark that too when the shim supplied it.
+			markReducedSession(input.childSessionId);
 			log(
 				`[magic-context][pi] bound child session ${keys[0]} to parent ${input.parentSessionFile ?? "(unknown)"} on ${targets.length} instance(s)`,
+			);
+			// Reduced mode is marked by session id, which only the shim can supply. Say so
+			// rather than failing silently: a child without it would quietly receive the
+			// parent-oriented prompt surface (v2 ticket 02/03).
+			log(
+				input.childSessionId
+					? `[magic-context][pi] child ${input.childSessionId} is served in reduced mode`
+					: "[magic-context][pi] child bound WITHOUT a session id — reduced mode not marked, the pass will treat it as a parent session",
+			);
+		},
+		runTool: async (toolName, params, ctx) => {
+			if (!CHILD_TOOL_ALLOWLIST.has(toolName)) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Error: '${toolName}' is not available in this session.`,
+						},
+					],
+					details: undefined,
+				};
+			}
+			const definition = resolve(ctx)?.tools.get(toolName);
+			if (!definition) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Error: '${toolName}' is not available — Magic Context has no instance serving this session.`,
+						},
+					],
+					details: undefined,
+				};
+			}
+			return definition.execute(
+				`child-${toolName}-${Date.now()}`,
+				params,
+				undefined,
+				undefined,
+				ctx,
 			);
 		},
 		clearSession: (sessionId) => {
@@ -135,6 +209,7 @@ export function registerPiRegistry(options: {
 				entry.bound.delete(sessionId);
 				entry.registry.clearSession(sessionId);
 			}
+			unmarkReducedSession(sessionId);
 		},
 	};
 	(globalThis as Record<symbol, unknown>)[REGISTRY_KEY] = facade;

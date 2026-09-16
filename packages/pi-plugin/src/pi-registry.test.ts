@@ -7,6 +7,7 @@
  * mistaken for a child.
  */
 import { describe, expect, it } from "bun:test";
+import { __clearReducedSessionsForTests, isReducedSession } from "./pi-child-mode";
 import { __piRegistrySizeForTests, registerPiRegistry } from "./pi-registry";
 
 const KEY = Symbol.for("@cortexkit/magic-context:pi-registry");
@@ -187,5 +188,76 @@ describe("serving a bound child", () => {
 			unpublishA();
 			unpublishB();
 		}
+	});
+});
+
+describe("serving a bound child its three tools (v2 ticket 02)", () => {
+	it("refuses a tool that is not on the allowlist", async () => {
+		const instance = fakeInstance("a");
+		registerPiRegistry({ dbPath: "/db", projectDir: "/w", registry: instance.registry });
+		const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
+			runTool: (n: string, p: Record<string, unknown>, c: unknown) => Promise<{ content: Array<{ text: string }> }>;
+		};
+		const result = await facade.runTool("ctx_memory", {}, fakeCtx("child"));
+		expect(result.content[0]?.text).toContain("not available");
+	});
+
+	it("runs an allowlisted tool through the instance that owns the session", async () => {
+		let called: { name: string; params: unknown; ctx: unknown } | null = null;
+		const instance = fakeInstance("a");
+		// Unique keys: the registry is process state shared with the other tests in this
+		// file, so a session id any of them also binds would resolve to their instance.
+		const childId = "v2-child-tools";
+		const childFile = "/sessions/v2-child-tools.jsonl";
+		const tools = new Map<string, unknown>([
+			[
+				"ctx_search",
+				{
+					name: "ctx_search",
+					execute: async (_id: string, params: unknown, _s: unknown, _u: unknown, ctx: unknown) => {
+						called = { name: "ctx_search", params, ctx };
+						return { content: [{ type: "text", text: "hits" }], details: undefined };
+					},
+				},
+			],
+		]);
+		registerPiRegistry({
+			dbPath: "/db",
+			// A project directory of its own: `bindChild` binds every instance whose
+			// projectDir matches, and instances left registered by earlier tests would
+			// otherwise win the resolution below with an empty tool map.
+			projectDir: "/v2-w-tools",
+			registry: instance.registry,
+			tools: tools as never,
+		});
+		const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
+			bindChild: (i: { childSessionFile: string; childSessionId: string; cwd: string }) => void;
+			runTool: (n: string, p: Record<string, unknown>, c: unknown) => Promise<{ content: Array<{ text: string }> }>;
+		};
+		const ctx = fakeCtx(childId, childFile);
+		facade.bindChild({ childSessionFile: childFile, childSessionId: childId, cwd: "/v2-w-tools" });
+
+		const result = await facade.runTool("ctx_search", { query: "x" }, ctx);
+		expect(result.content[0]?.text).toBe("hits");
+		// The child's own ctx travels with the call, which is what makes MC's existing
+		// session-scoped search and reduce resolve to the child rather than the parent.
+		expect(called).not.toBeNull();
+		expect((called as { ctx: unknown }).ctx).toBe(ctx);
+	});
+
+	it("marks a bound child reduced, and clears it when the child ends", () => {
+		const instance = fakeInstance("a");
+		const childId = "v2-child-reduced";
+		registerPiRegistry({ dbPath: "/db", projectDir: "/v2-w-reduced", registry: instance.registry });
+		const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
+			bindChild: (i: { childSessionFile: string; childSessionId: string; cwd: string }) => void;
+			clearSession: (id: string) => void;
+		};
+		__clearReducedSessionsForTests();
+		expect(isReducedSession(childId)).toBe(false);
+		facade.bindChild({ childSessionFile: `/sessions/${childId}.jsonl`, childSessionId: childId, cwd: "/v2-w-reduced" });
+		expect(isReducedSession(childId)).toBe(true);
+		facade.clearSession(childId);
+		expect(isReducedSession(childId)).toBe(false);
 	});
 });

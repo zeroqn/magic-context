@@ -191,6 +191,11 @@ import {
 } from "./system-prompt";
 import { withTimeout } from "./timeout";
 import { registerPiRegistry } from "./pi-registry";
+import {
+	ensureChildTagSentence,
+	isReducedSession,
+	shouldLogTagSentence,
+} from "./pi-child-mode";
 import { registerMagicContextTools, syncCtxMemoryToolEnabled } from "./tools";
 import {
 	parseTodos,
@@ -1438,7 +1443,7 @@ async function startPiMagicContextRuntime(
 	// `todowrite.enabled` follows the boot project's config: after `/cd` into a
 	// project with a different value, users need `/reload` or a Pi restart for the
 	// tool/command/overlay surface to change, matching Pi's registration lifecycle.
-	registerMagicContextTools(pi, {
+	const registeredTools = registerMagicContextTools(pi, {
 		db,
 		ensureProjectRegistered: ensureProjectRegisteredFromPiDirectory,
 		// Main extension entry never gets the dreamer-only ctx_memory
@@ -1547,8 +1552,32 @@ async function startPiMagicContextRuntime(
 	const unregisterPiRegistry = registerPiRegistry({
 		dbPath,
 		projectDir,
+		// v2 ticket 02: the definitions, so a bound child can be served the three granted
+		// tools through the registry instead of loading Magic Context's factory itself.
+		tools: registeredTools,
 		registry: {
-			transformContext: (event, ctx) => runContextPass(event, ctx),
+			transformContext: async (event, ctx) => {
+				const sessionId = ctx?.sessionManager?.getSessionId?.();
+				const result = await runContextPass(event, ctx);
+				// v2 ticket 05: Magic Context owns the wording that explains its own surface,
+				// so the tag sentence is added here for a bound child and nowhere else. A pass
+				// that returned nothing still leaves the messages to attach it to.
+				if (!isReducedSession(sessionId)) return result;
+				const base = result ?? { messages: event.messages };
+				const withTagSentence = ensureChildTagSentence(base, sessionId);
+				// Say what happened rather than failing silently: an un-injected sentence on a
+				// bound child is a capability the child was granted and does not know about.
+				// Once per child, since injection runs on every pass by design (the header of
+				// `pi-child-mode.ts` explains why).
+				if (shouldLogTagSentence(sessionId)) {
+					log(
+						withTagSentence === base
+							? `[magic-context][pi] child ${sessionId}: tag sentence already present or nothing to attach it to (roles: ${base.messages.map((m) => m?.role).join(",")})`
+							: `[magic-context][pi] child ${sessionId}: tag sentence injected`,
+					);
+				}
+				return withTagSentence;
+			},
 			compact: (ctx) =>
 				handlePiSessionBeforeCompact({ db, compactionOff, ctx }),
 			scrubMessage: (message) => {
