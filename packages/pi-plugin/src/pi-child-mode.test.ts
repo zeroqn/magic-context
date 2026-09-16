@@ -19,8 +19,17 @@ import {
 
 describe("the granted tool allowlist (v2 ticket 02)", () => {
 	it("is exactly the three tools, and never the withheld ones", () => {
-		expect([...CHILD_TOOL_ALLOWLIST].sort()).toEqual(["ctx_expand", "ctx_reduce", "ctx_search"]);
-		for (const withheld of ["ctx_memory", "ctx_note", "todowrite", "todo_view"]) {
+		expect([...CHILD_TOOL_ALLOWLIST].sort()).toEqual([
+			"ctx_expand",
+			"ctx_reduce",
+			"ctx_search",
+		]);
+		for (const withheld of [
+			"ctx_memory",
+			"ctx_note",
+			"todowrite",
+			"todo_view",
+		]) {
 			expect(CHILD_TOOL_ALLOWLIST.has(withheld)).toBe(false);
 		}
 	});
@@ -57,13 +66,17 @@ describe("the tag sentence (v2 ticket 05)", () => {
 		];
 		const result = ensureChildTagSentence({ messages }, "child");
 		expect(result?.messages[0]?.content).toBe("first");
-		expect(result?.messages[2]?.content).toBe(`do the thing\n\n${CHILD_TAG_SENTENCE}`);
+		expect(result?.messages[2]?.content).toBe(
+			`do the thing\n\n${CHILD_TAG_SENTENCE}`,
+		);
 	});
 
 	it("handles array content, and is idempotent", () => {
 		__clearReducedSessionsForTests();
 		markReducedSession("child");
-		const messages = [{ role: "user", content: [{ type: "text", text: "do the thing" }] }];
+		const messages = [
+			{ role: "user", content: [{ type: "text", text: "do the thing" }] },
+		];
 		const once = ensureChildTagSentence({ messages }, "child");
 		const parts = once?.messages[0]?.content as Array<{ text?: string }>;
 		expect(parts.at(-1)?.text).toBe(CHILD_TAG_SENTENCE);

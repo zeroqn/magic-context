@@ -40,11 +40,13 @@ const CHILD_TAG_MARKER = "tagged with §N§ identifiers";
 const reducedSessions = new Set<string>();
 
 export function markReducedSession(sessionId: string | undefined): void {
-	if (typeof sessionId === "string" && sessionId.length > 0) reducedSessions.add(sessionId);
+	if (typeof sessionId === "string" && sessionId.length > 0)
+		reducedSessions.add(sessionId);
 }
 
 export function unmarkReducedSession(sessionId: string | undefined): void {
-	if (typeof sessionId === "string" && sessionId.length > 0) reducedSessions.delete(sessionId);
+	if (typeof sessionId === "string" && sessionId.length > 0)
+		reducedSessions.delete(sessionId);
 }
 
 /**
@@ -83,7 +85,11 @@ function textOf(value: unknown): string {
 		let out = "";
 		for (const part of value) {
 			if (typeof part === "string") out += part;
-			else if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+			else if (
+				part &&
+				typeof part === "object" &&
+				typeof (part as { text?: unknown }).text === "string"
+			) {
 				out += (part as { text: string }).text;
 			}
 		}
@@ -94,14 +100,23 @@ function textOf(value: unknown): string {
 
 function alreadyTold(messages: unknown[]): boolean {
 	for (const message of messages) {
-		if (textOf((message as { content?: unknown })?.content).includes(CHILD_TAG_MARKER)) return true;
+		if (
+			textOf((message as { content?: unknown })?.content).includes(
+				CHILD_TAG_MARKER,
+			)
+		)
+			return true;
 	}
 	return false;
 }
 
-function withAppendedText<M extends { content?: unknown }>(message: M, text: string): M {
+function withAppendedText<M extends { content?: unknown }>(
+	message: M,
+	text: string,
+): M {
 	const content = message.content;
-	if (typeof content === "string") return { ...message, content: `${content}\n\n${text}` };
+	if (typeof content === "string")
+		return { ...message, content: `${content}\n\n${text}` };
 	if (Array.isArray(content)) {
 		return { ...message, content: [...content, { type: "text", text }] };
 	}
@@ -113,7 +128,9 @@ function withAppendedText<M extends { content?: unknown }>(message: M, text: str
  * the message the child reads as its task. Returns the input untouched when the session
  * is not a bound child, there is nothing to attach to, or the sentence is already there.
  */
-export function ensureChildTagSentence<M extends { role?: unknown; content?: unknown }>(
+export function ensureChildTagSentence<
+	M extends { role?: unknown; content?: unknown },
+>(
 	result: { messages: M[] } | undefined,
 	sessionId: string | undefined,
 ): { messages: M[] } | undefined {
