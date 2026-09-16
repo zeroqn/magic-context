@@ -7,7 +7,10 @@
  * mistaken for a child.
  */
 import { describe, expect, it } from "bun:test";
-import { __clearReducedSessionsForTests, isReducedSession } from "./pi-child-mode";
+import {
+	__clearReducedSessionsForTests,
+	isReducedSession,
+} from "./pi-child-mode";
 import { __piRegistrySizeForTests, registerPiRegistry } from "./pi-registry";
 
 const KEY = Symbol.for("@cortexkit/magic-context:pi-registry");
@@ -194,9 +197,17 @@ describe("serving a bound child", () => {
 describe("serving a bound child its three tools (v2 ticket 02)", () => {
 	it("refuses a tool that is not on the allowlist", async () => {
 		const instance = fakeInstance("a");
-		registerPiRegistry({ dbPath: "/db", projectDir: "/w", registry: instance.registry });
+		registerPiRegistry({
+			dbPath: "/db",
+			projectDir: "/w",
+			registry: instance.registry,
+		});
 		const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
-			runTool: (n: string, p: Record<string, unknown>, c: unknown) => Promise<{ content: Array<{ text: string }> }>;
+			runTool: (
+				n: string,
+				p: Record<string, unknown>,
+				c: unknown,
+			) => Promise<{ content: Array<{ text: string }> }>;
 		};
 		const result = await facade.runTool("ctx_memory", {}, fakeCtx("child"));
 		expect(result.content[0]?.text).toContain("not available");
@@ -214,9 +225,18 @@ describe("serving a bound child its three tools (v2 ticket 02)", () => {
 				"ctx_search",
 				{
 					name: "ctx_search",
-					execute: async (_id: string, params: unknown, _s: unknown, _u: unknown, ctx: unknown) => {
+					execute: async (
+						_id: string,
+						params: unknown,
+						_s: unknown,
+						_u: unknown,
+						ctx: unknown,
+					) => {
 						called = { name: "ctx_search", params, ctx };
-						return { content: [{ type: "text", text: "hits" }], details: undefined };
+						return {
+							content: [{ type: "text", text: "hits" }],
+							details: undefined,
+						};
 					},
 				},
 			],
@@ -231,11 +251,23 @@ describe("serving a bound child its three tools (v2 ticket 02)", () => {
 			tools: tools as never,
 		});
 		const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
-			bindChild: (i: { childSessionFile: string; childSessionId: string; cwd: string }) => void;
-			runTool: (n: string, p: Record<string, unknown>, c: unknown) => Promise<{ content: Array<{ text: string }> }>;
+			bindChild: (i: {
+				childSessionFile: string;
+				childSessionId: string;
+				cwd: string;
+			}) => void;
+			runTool: (
+				n: string,
+				p: Record<string, unknown>,
+				c: unknown,
+			) => Promise<{ content: Array<{ text: string }> }>;
 		};
 		const ctx = fakeCtx(childId, childFile);
-		facade.bindChild({ childSessionFile: childFile, childSessionId: childId, cwd: "/v2-w-tools" });
+		facade.bindChild({
+			childSessionFile: childFile,
+			childSessionId: childId,
+			cwd: "/v2-w-tools",
+		});
 
 		const result = await facade.runTool("ctx_search", { query: "x" }, ctx);
 		expect(result.content[0]?.text).toBe("hits");
@@ -248,14 +280,26 @@ describe("serving a bound child its three tools (v2 ticket 02)", () => {
 	it("marks a bound child reduced, and clears it when the child ends", () => {
 		const instance = fakeInstance("a");
 		const childId = "v2-child-reduced";
-		registerPiRegistry({ dbPath: "/db", projectDir: "/v2-w-reduced", registry: instance.registry });
+		registerPiRegistry({
+			dbPath: "/db",
+			projectDir: "/v2-w-reduced",
+			registry: instance.registry,
+		});
 		const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
-			bindChild: (i: { childSessionFile: string; childSessionId: string; cwd: string }) => void;
+			bindChild: (i: {
+				childSessionFile: string;
+				childSessionId: string;
+				cwd: string;
+			}) => void;
 			clearSession: (id: string) => void;
 		};
 		__clearReducedSessionsForTests();
 		expect(isReducedSession(childId)).toBe(false);
-		facade.bindChild({ childSessionFile: `/sessions/${childId}.jsonl`, childSessionId: childId, cwd: "/v2-w-reduced" });
+		facade.bindChild({
+			childSessionFile: `/sessions/${childId}.jsonl`,
+			childSessionId: childId,
+			cwd: "/v2-w-reduced",
+		});
 		expect(isReducedSession(childId)).toBe(true);
 		facade.clearSession(childId);
 		expect(isReducedSession(childId)).toBe(false);
