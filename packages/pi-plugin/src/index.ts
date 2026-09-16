@@ -2376,6 +2376,8 @@ async function startPiMagicContextRuntime(
 				| undefined;
 			const sessionId = sm?.getSessionId?.();
 			if (typeof sessionId !== "string" || sessionId.length === 0) return;
+			// SAFETY: Pi event payloads are unknown to this plugin; every field is narrowed by
+			// a typeof check below, and an absent field is a no-op.
 			const endedMsg = event.message as unknown as {
 				id?: string;
 				role?: string;
@@ -2587,6 +2589,8 @@ async function startPiMagicContextRuntime(
 		// resolved we just skip — Pi resets module state on /reload
 		// anyway.
 		try {
+			// SAFETY: the host ctx is opaque here; sessionManager is probed with typeof
+			// before any call, and its absence just skips cleanup.
 			const sm = (
 				ctx as unknown as {
 					sessionManager?: { getSessionId?: () => string | undefined };
@@ -2616,6 +2620,8 @@ async function startPiMagicContextRuntime(
 	// OpenCode's `session.deleted` handler in `event-handler.ts`.
 	pi.on("session_before_switch", (_event, ctx) => {
 		try {
+			// SAFETY: the host ctx is opaque here; sessionManager is probed with typeof
+			// before any call, and its absence just skips cleanup.
 			const sm = (
 				ctx as unknown as {
 					sessionManager?: { getSessionId?: () => string | undefined };
