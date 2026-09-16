@@ -190,6 +190,7 @@ import {
 	processSystemPromptForCache,
 } from "./system-prompt";
 import { withTimeout } from "./timeout";
+import { registerPiRegistry } from "./pi-registry";
 import { registerMagicContextTools, syncCtxMemoryToolEnabled } from "./tools";
 import {
 	parseTodos,
@@ -1536,7 +1537,32 @@ async function startPiMagicContextRuntime(
 	// Register the per-LLM-call transform pipeline. Tags eligible message
 	// parts via the shared Tagger and applies queued drops from
 	// `pending_ops` so /ctx-flush and ctx_reduce work against Pi sessions.
-	registerPiContextHandler(pi, bootProjectDeps.contextOptions);
+	const { runContextPass } = registerPiContextHandler(
+		pi,
+		bootProjectDeps.contextOptions,
+	);
+
+	// Serve RLM's bound child sessions from this instance (ticket 16, seam B). The
+	// facade marks which sessions this instance owns; here we only supply the work.
+	const unregisterPiRegistry = registerPiRegistry({
+		dbPath,
+		projectDir,
+		registry: {
+			transformContext: (event, ctx) => runContextPass(event, ctx),
+			compact: (ctx) =>
+				handlePiSessionBeforeCompact({ db, compactionOff, ctx }),
+			scrubMessage: (message) => {
+				if (!compactionOff && message !== null && typeof message === "object") {
+					stripTagPrefixFromAssistantMessage(
+						message as { role: string; content: unknown },
+					);
+				}
+			},
+			// Binding is the facade's bookkeeping; the instance resolves by the ctx it is given.
+			bindChild: () => undefined,
+			clearSession: (sessionId) => clearContextHandlerSession(sessionId),
+		},
+	});
 	info(
 		bootProjectDeps.historianConfig
 			? `registered historian trigger (model=${bootProjectDeps.historianConfig.model}, executeThreshold=${formatExecuteThresholdForLog(bootProjectDeps.historianConfig.executeThresholdPercentage)})`
@@ -2525,6 +2551,7 @@ async function startPiMagicContextRuntime(
 	// the cached handle is still valid across reload boundaries.
 	pi.on("session_shutdown", async (_event, ctx) => {
 		sessionShuttingDown = true;
+		unregisterPiRegistry();
 		commandLifecycleController.abort();
 		// Bounded drain of in-flight historian / dreamer runs that were
 		// kicked off by recent turns. We moved the drain here from

@@ -2247,7 +2247,7 @@ function loadPiHistorianStateSnapshot(
 export function registerPiContextHandler(
 	pi: ExtensionAPI,
 	baseOptions: PiContextHandlerOptions,
-): void {
+): { runContextPass: (event: ContextEvent, ctx: ExtensionContext) => Promise<{ messages: ContextEvent["messages"] } | undefined> } {
 	const tagger = createTagger();
 	const lkgCoordinator = createPiLkgCoordinator(
 		baseOptions.db,
@@ -2305,7 +2305,10 @@ export function registerPiContextHandler(
 		sessionLog(sessionId, message);
 	});
 
-	registerPiGuardedContext(pi, async (event, ctx) => {
+	const runContextPass = async (
+		event: ContextEvent,
+		ctx: ExtensionContext,
+	): Promise<{ messages: ContextEvent["messages"] } | undefined> => {
 		const transformStartTime = performance.now();
 		let rawMessageCount = 0;
 		let rawFallbackLimit: number | undefined;
@@ -3803,10 +3806,13 @@ export function registerPiContextHandler(
 			// messages, equivalent to a no-op transform pass.
 			return;
 		}
-	});
+	};
+
+	registerPiGuardedContext(pi, runContextPass);
 	log(
 		"[magic-context][pi] registered context handler (tagging + drops + nudges)",
 	);
+	return { runContextPass };
 }
 
 /**
