@@ -43,6 +43,7 @@ import {
 	renewCompartmentLease,
 } from "@magic-context/core/features/magic-context/compartment-lease";
 import { isFailClosedBlockingError } from "@magic-context/core/features/magic-context/fail-closed-block";
+import { isReducedSession } from "./pi-child-mode";
 import {
 	isUsableProjectIdentity,
 	resolveProjectIdentityForSession,
@@ -6505,8 +6506,15 @@ export function registerPiContextHandler(
 			);
 			const tNoteNudges = performance.now();
 			try {
-				// Note nudges are primary-only (ARCHITECTURE.md, Session modes).
-				if (!options.compactionOff && !sessionMeta.isSubagent) {
+				// Note nudges are primary-only (ARCHITECTURE.md, Session modes), and a bound
+				// child is not primary either: it is served in reduced mode (v2 ticket 02/03),
+				// so nudges — which exist to prompt the context owner — are withheld from it
+				// too, while compaction and the tag sentence stay.
+				if (
+					!options.compactionOff &&
+					!sessionMeta.isSubagent &&
+					!isReducedSession(sessionId)
+				) {
 					outputMessages = applyNoteNudges({
 						sessionId,
 						db: options.db,
@@ -6542,6 +6550,7 @@ export function registerPiContextHandler(
 				!options.compactionOff &&
 				!sessionMeta.isSubagent &&
 				result.prefixMutationAllowed &&
+				!isReducedSession(sessionId) &&
 				budget.remainingWork() > PI_CONTEXT_BUDGET.searchMs
 			) {
 				guardSqliteTransformPass({
