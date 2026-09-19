@@ -136,6 +136,7 @@ import {
 	resolveSessionId,
 } from "./commands/pi-command-utils";
 import { loadPiConfig, loadPiConfigDetailed } from "./config";
+import { ensurePiNativeConfigLink } from "./pi-native-config";
 import {
 	awaitInFlightHistorians,
 	clearContextHandlerSession,
@@ -1073,6 +1074,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	// Project config cannot alter it, so every project in this process shares the
 	// operator's chosen owner-private or externally managed permission policy.
 	const bootProjectDir = process.cwd();
+	// Pi keeps its real config in pi's own tree; the CortexKit path is a symlink to
+	// it. Reconcile BEFORE the first read, so a clobbered link cannot serve a stale
+	// or divergent file to the config load below.
+	ensurePiNativeConfigLink();
 	ensureConfigLocationsMigrated(bootProjectDir);
 	const bootConfig = loadPiConfig({ cwd: bootProjectDir });
 	if (!bootConfig.config.enabled) {
@@ -1655,6 +1660,7 @@ async function startPiMagicContextRuntime(
 		// Pi emits session_start for new, resumed, and reloaded sessions. Re-read
 		// this cwd's config before setting the active tools so a memory.enabled
 		// change takes effect at the next session without restarting Pi.
+		ensurePiNativeConfigLink();
 		projectDepsByDir.delete(ctx.cwd);
 		const current = resolveCurrentProjectDeps(ctx);
 		activeModelRegistry = ctx.modelRegistry;
