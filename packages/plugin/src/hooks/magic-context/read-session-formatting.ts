@@ -2,7 +2,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { COMMIT_VERB_PATTERN, createCommitHashExtractPattern } from "../../shared/commit-detection";
 import { OMO_INTERNAL_INITIATOR_MARKER } from "../../shared/internal-initiator-marker";
 import { isSystemDirective, removeSystemReminders } from "../../shared/system-directive";
@@ -152,11 +152,40 @@ let tokenizerWarningSent = false;
 let tokenizerEncodingPath: string | undefined;
 let tokenizerSerializedTableBytes: number | null | undefined;
 
-function tokenizerPackageRoots(): string[] {
+/** Every `node_modules/ai-tokenizer` hoisted at or above `startDir`. */
+function pushAncestorTokenizerPaths(startDir: string, candidates: string[]): void {
+    let ancestor = startDir;
+    while (true) {
+        candidates.push(join(ancestor, "node_modules", "ai-tokenizer"));
+        const parent = dirname(ancestor);
+        if (parent === ancestor) break;
+        ancestor = parent;
+    }
+}
+
+/** This module's directory, or undefined when a bundler rewrote import.meta.url. */
+function tokenizerModuleDirectory(): string | undefined {
+    try {
+        return dirname(fileURLToPath(import.meta.url));
+    } catch {
+        return undefined;
+    }
+}
+
+export function tokenizerPackageRoots(): string[] {
     const cwd = process.cwd();
     const openCodeCache = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "opencode");
     const roots = [cwd, openCodeCache];
     const candidates: string[] = [];
+
+    // A compiled host binary (bun build --compile) resolves createRequire(import.meta.url)
+    // against its virtual /$bunfs module base, so the dependency can only be found by
+    // walking the filesystem. The plugin's own install directory is the one location that
+    // always holds it: a git install hoists ai-tokenizer to the checkout root above the
+    // plugin, never into the host's cwd or its OpenCode cache.
+    const moduleDir = tokenizerModuleDirectory();
+    if (moduleDir) pushAncestorTokenizerPaths(moduleDir, candidates);
+
     for (const root of roots) {
         for (const packageDir of TOKENIZER_PACKAGE_DIRS) {
             // Prefer a dependency nested under the plugin over a conflicting
@@ -168,13 +197,12 @@ function tokenizerPackageRoots(): string[] {
         candidates.push(join(root, "node_modules", "ai-tokenizer"));
     }
 
-    let ancestor = process.argv[1] ? dirname(resolve(process.argv[1])) : cwd;
-    while (true) {
-        candidates.push(join(ancestor, "node_modules", "ai-tokenizer"));
-        const parent = dirname(ancestor);
-        if (parent === ancestor) break;
-        ancestor = parent;
-    }
+    // process.argv[1] is the host entry point. It is a virtual /$bunfs path under a
+    // compiled binary and a real path under Node, where its ancestors can hoist a copy.
+    pushAncestorTokenizerPaths(
+        process.argv[1] ? dirname(resolve(process.argv[1])) : cwd,
+        candidates,
+    );
     return [...new Set(candidates)];
 }
 
@@ -241,7 +269,7 @@ async function loadTokenizerFromInstalledPackage(): Promise<TokenizerLike> {
     const installedPaths = findTokenizerImportPaths();
     if (!installedPaths) {
         throw new Error(
-            "ai-tokenizer was not found under the project, runtime, or OpenCode cache node_modules roots",
+            "ai-tokenizer was not found under the plugin, project, runtime, or OpenCode cache node_modules roots",
         );
     }
     const [tokenizerModule, claudeEncoding] = await Promise.all([
