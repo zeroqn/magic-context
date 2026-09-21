@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use crate::external_cache_sessions;
 use crate::pi_sessions;
 use crate::project_identity::{basename, normalize_stored_project_path};
+use crate::wal_filesystem;
 
 #[cfg(test)]
 use std::sync::Mutex;
@@ -544,6 +545,60 @@ fn ensure_context_store_uuid(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// The connection's current journal mode, lowercased, or "unknown" if it cannot
+/// be read.
+fn journal_mode_name(conn: &Connection) -> String {
+    conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+        .unwrap_or_else(|_| "unknown".to_string())
+        .to_lowercase()
+}
+
+/// Pick the journal mode for this connection the way the plugin does
+/// (`packages/plugin/src/features/magic-context/storage-db.ts`): WAL where it is
+/// safe, and the rollback journal with `synchronous=FULL` where it is not. See
+/// `wal_filesystem` for why virtiofs cannot be trusted with WAL, and why leaving
+/// it alone here would undo the plugin's fallback for the shared database.
+///
+/// `FULL` is not optional alongside the rollback journal: `NORMAL` is documented
+/// as corruption-safe *because of* WAL, so carrying it over would reintroduce the
+/// torn pages this avoids. Unlike the journal mode it is per-connection, so it is
+/// set on every open.
+fn apply_journal_mode(conn: &Connection, path: &Path) -> Result<(), rusqlite::Error> {
+    let Some(unsafe_filesystem) = wal_filesystem::wal_unsafe_filesystem(path) else {
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        return Ok(());
+    };
+    conn.execute_batch("PRAGMA synchronous=FULL")?;
+    // Once the database is out of WAL mode there is nothing left to switch and
+    // nothing left to announce: the mode is a property of the file, so every
+    // later open of a migrated store stays quiet.
+    if journal_mode_name(conn) == "delete" {
+        return Ok(());
+    }
+    // Only ask for the mode when it is not already in force: a journal-mode change
+    // needs the exclusive lock, and a plugin writing right now should not be able
+    // to make the dashboard fail to open over a switch already made.
+    if let Err(error) = conn.execute_batch("PRAGMA journal_mode=DELETE") {
+        eprintln!(
+            "magic-context dashboard: could not switch {} to journal_mode=delete: {error}",
+            path.display()
+        );
+    }
+    let mode = journal_mode_name(conn);
+    if mode == "delete" {
+        eprintln!(
+            "magic-context dashboard: {unsafe_filesystem} cannot support SQLite WAL: using journal_mode=delete with synchronous=FULL for {}",
+            path.display()
+        );
+    } else {
+        eprintln!(
+            "magic-context dashboard: WARNING {unsafe_filesystem} cannot support SQLite WAL, but {} is still in journal_mode={mode}: durability is not guaranteed until a connection can take the database to itself",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Opens a read-write connection for write operations (memory edits, queue entries).
 pub fn open_readwrite(path: &PathBuf) -> Result<Connection, rusqlite::Error> {
     // READ_WRITE WITHOUT CREATE: if the DB file vanished after startup,
@@ -554,12 +609,12 @@ pub fn open_readwrite(path: &PathBuf) -> Result<Connection, rusqlite::Error> {
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
-    // busy_timeout MUST come before journal_mode=WAL: setting WAL can itself need
-    // the file lock, and with the timeout installed last a cold-open under
-    // contention fails immediately with SQLITE_BUSY instead of waiting.
+    // busy_timeout MUST come before any journal-mode change: setting one can
+    // itself need the file lock, and with the timeout installed last a cold-open
+    // under contention fails immediately with SQLITE_BUSY instead of waiting.
     conn.pragma_update(None, "busy_timeout", 5000)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    apply_journal_mode(&conn, path)?;
     // This opener has no module client, so a marker-less store cannot be classified as
     // regressed here. The later module handshake performs the authoritative reconciliation.
     ensure_context_store_uuid(&conn)?;

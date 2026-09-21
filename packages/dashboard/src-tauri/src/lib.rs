@@ -9,6 +9,7 @@ pub mod pi_sessions;
 pub mod process_ext;
 pub mod project_identity;
 pub mod serve;
+pub mod wal_filesystem;
 pub mod workspaces;
 
 use std::path::PathBuf;
