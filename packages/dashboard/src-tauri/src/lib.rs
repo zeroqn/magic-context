@@ -14,6 +14,7 @@ pub mod serve;
 pub mod test_bin;
 #[cfg(test)]
 pub mod test_env;
+pub mod wal_filesystem;
 pub mod workspaces;
 
 use std::path::PathBuf;
