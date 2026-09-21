@@ -79,6 +79,7 @@ import {
     setDatabase as setToolDefinitionDatabase,
 } from "./tool-definition-tokens";
 import { runToolOwnerBackfill } from "./tool-owner-backfill";
+import { detectWalUnsafeFilesystem } from "./wal-filesystem";
 
 // The SQLite chokepoint cannot import the logging chain itself (it is executed
 // directly by Node in the backend smoke); every storage open path runs through
@@ -1120,9 +1121,71 @@ function finishDatabaseOpen(
     return db;
 }
 
+/** The connection's current journal mode, or "unknown" when it cannot be read. */
+function journalMode(db: Database): string {
+    try {
+        const row = db.prepare("PRAGMA journal_mode").get() as Record<string, unknown> | undefined;
+        const value = row === undefined ? undefined : (row.journal_mode ?? Object.values(row)[0]);
+        return typeof value === "string" ? value.toLowerCase() : "unknown";
+    } catch {
+        return "unknown";
+    }
+}
+
+/**
+ * Choose the journal mode for this connection's filesystem.
+ *
+ * On a filesystem where WAL's assumptions do not hold (see `wal-filesystem.ts`)
+ * the rollback journal is the only durable choice, and it MUST be paired with
+ * `synchronous=FULL`: `NORMAL` is documented as corruption-safe *because of*
+ * WAL, so carrying it over to a rollback journal would reintroduce the torn
+ * pages this fallback exists to prevent.
+ *
+ * `dbPath` is undefined only for callers that open the database themselves
+ * (tests, CLI tools) rather than through an open path that owns the file; those
+ * keep WAL, since this module cannot vouch for a path it was not given.
+ */
+function applyJournalMode(db: Database, dbPath: string | undefined): void {
+    const unsafeFilesystem = dbPath === undefined ? null : detectWalUnsafeFilesystem(dbPath);
+    if (unsafeFilesystem === null) {
+        configureContextDatabasePragmas(db);
+        return;
+    }
+    db.exec("PRAGMA synchronous=FULL");
+    // Only ask for the mode when it is not already in force: a journal-mode
+    // change needs the exclusive lock, and a sibling process writing right now
+    // should not be able to make this open fail over a switch already made.
+    if (journalMode(db) !== "delete") {
+        try {
+            db.exec("PRAGMA journal_mode=DELETE");
+        } catch (error) {
+            log(
+                `[magic-context] could not switch ${dbPath} to journal_mode=delete: ${getErrorMessage(error)}`,
+            );
+        }
+    }
+    const mode = journalMode(db);
+    if (mode === "delete") {
+        log(
+            `[magic-context] ${unsafeFilesystem} cannot support SQLite WAL: using journal_mode=delete with synchronous=FULL for ${dbPath}`,
+        );
+        return;
+    }
+    // The switch needs the exclusive lock and could not take it: either a sibling
+    // process is mid-write, or this process still holds an earlier connection —
+    // bun:sqlite leaves the WAL and its locks behind when a prepared statement
+    // outlives close(), where node:sqlite releases them. Never fail the open over
+    // this, and never claim the durability that was not established. The next
+    // open retries the switch.
+    log(
+        `[magic-context] WARNING ${unsafeFilesystem} cannot support SQLite WAL, but ${dbPath} is still in journal_mode=${mode}: durability is not guaranteed until a connection can take the database to itself`,
+    );
+}
+
 export function initializeDatabase(
     db: Database,
     busyTimeoutMs = BOOT_SQLITE_BUSY_TIMEOUT_MS,
+    dbPath?: string,
 ): void {
     // Keep the same finite timeout through schema creation and migrations. The
     // open paths install it before their first read; direct initializer callers
@@ -1132,7 +1195,7 @@ export function initializeDatabase(
     // or writes: it defaults to OFF, which silently breaks every ON DELETE
     // CASCADE / SET NULL declared in the schema below and in migrations.
     db.exec("PRAGMA foreign_keys=ON");
-    configureContextDatabasePragmas(db);
+    applyJournalMode(db, dbPath);
     applySqliteTuningPragmas(db);
     db.exec(`
     CREATE TABLE IF NOT EXISTS tags (
@@ -2689,7 +2752,7 @@ export function openDatabase(dbPathOrOptions?: string | OpenDatabaseOptions): Da
             closeQuietly(db);
             return null;
         }
-        initializeDatabase(db, busyTimeoutMs);
+        initializeDatabase(db, busyTimeoutMs, dbPath);
         if (options?.allowMigrations === false) {
             if (hasPendingMigrations(db)) {
                 closeQuietly(db);
@@ -2826,7 +2889,7 @@ export async function openDatabaseAsync(
                     "the migration worker did not complete the pending migration; reinstall or rebuild the plugin",
                 );
             }
-            initializeDatabase(db, busyTimeoutMs);
+            initializeDatabase(db, busyTimeoutMs, dbPath);
             if (hasPendingMigrations(db)) {
                 throw new Error(
                     "storage initialization left a pending migration; reinstall or rebuild the plugin",
