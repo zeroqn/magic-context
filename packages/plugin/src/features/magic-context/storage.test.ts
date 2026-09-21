@@ -46,12 +46,14 @@ import {
     updateTagStatus,
 } from "./storage";
 import { ensureColumn, initializeDatabase } from "./storage-db";
+import { __resetMountTableReaderForTests, __setMountTableReaderForTests } from "./wal-filesystem";
 
 const tempDirs: string[] = [];
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
 
 afterEach(() => {
     closeDatabase();
+    __resetMountTableReaderForTests();
     if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = originalXdgDataHome;
 
@@ -123,6 +125,9 @@ describe("magic-context storage", () => {
     it("opens file DB with WAL mode, busy timeout, and required tables", () => {
         //#given
         const dataHome = useTempDataHome("context-storage-open-");
+        // WAL is the mode for a WAL-safe filesystem; the temp dir's filesystem is
+        // not this test's subject (see wal-filesystem).
+        __setMountTableReaderForTests(() => "/dev/sda1 / ext4 rw,relatime 0 0\n");
         //#when
         const db = openDatabase();
         const wal = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };

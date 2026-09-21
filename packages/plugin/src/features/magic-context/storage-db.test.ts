@@ -48,6 +48,7 @@ import {
 } from "./storage-db";
 import { clearSession } from "./storage-meta-session";
 import { SESSION_SCOPED_TABLES } from "./storage-session-tables";
+import { __resetMountTableReaderForTests, __setMountTableReaderForTests } from "./wal-filesystem";
 
 const tempDirs: string[] = [];
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
@@ -66,6 +67,17 @@ function useTempDataHome(prefix: string): string {
     process.env.XDG_DATA_HOME = dataHome;
     process.env.MAGIC_CONTEXT_TEST_DATA_DIR = dataHome;
     return dataHome;
+}
+
+/** A mount table in which nothing is a filesystem WAL has been shown to fail on. */
+const WAL_SAFE_MOUNT_TABLE = "/dev/sda1 / ext4 rw,relatime 0 0\n";
+
+/** A mount table in which the whole filesystem is the one WAL cannot be used on. */
+const VIRTIOFS_MOUNT_TABLE = "/dev/root / virtiofs rw,relatime 0 0\n";
+
+function journalModeName(db: Database): string {
+    const row = db.prepare("PRAGMA journal_mode").get() as Record<string, unknown>;
+    return String(row.journal_mode ?? Object.values(row)[0]).toLowerCase();
 }
 
 function resolveDbPath(dataHome: string): string {
@@ -111,6 +123,7 @@ afterEach(() => {
     __resetRpcDiscoveryFsForTests();
     __resetSchemaFenceStateForTests();
     __resetStoragePermissionFsForTests();
+    __resetMountTableReaderForTests();
     __resetRpcIdentityTestHooks();
     __resetStoragePrivatePermissionEnforcementForTests();
     if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
@@ -272,6 +285,14 @@ describe("explicit shared storage resolution", () => {
                 const timeout = opened.prepare("PRAGMA busy_timeout").get() as { timeout: number };
                 expect(timeout.timeout).toBe(35);
             }
+        } catch {
+            // Refusing to open is one of the outcomes the open contract allows
+            // (fail closed rather than wait); the subject here is that whatever
+            // happens is bounded. Whether the lock bites at all depends on the
+            // journal mode: in WAL the holder's own mode switch above cannot take
+            // the exclusive lock, so a reader is never blocked and this arm is
+            // unreachable — under a rollback journal the lock is real.
+            expect(performance.now() - startedAt).toBeLessThan(1_000);
         } finally {
             holder.exec("ROLLBACK");
             closeQuietly(holder);
@@ -323,6 +344,10 @@ describe("storage-db", () => {
     describe("#given openDatabase", () => {
         it("#when called first time #then creates DB with WAL mode and busy_timeout", () => {
             const dataHome = useTempDataHome("storage-db-wal-");
+            // Which journal mode a new database gets is a property of the
+            // filesystem, not of this machine: state the WAL-safe case rather
+            // than inheriting whichever filesystem the temp dir landed on.
+            __setMountTableReaderForTests(() => WAL_SAFE_MOUNT_TABLE);
 
             const db = openDatabase();
 
@@ -332,6 +357,57 @@ describe("storage-db", () => {
             expect(Object.values(timeout)[0]).toBe(5000);
             expect(existsSync(resolveDbPath(dataHome))).toBe(true);
             expect(isDatabasePersisted(db)).toBe(true);
+        });
+
+        it("#when the filesystem cannot support WAL #then opens with journal_mode=delete and synchronous=FULL", () => {
+            const dataHome = useTempDataHome("storage-db-virtiofs-");
+            // Every path is inside "/", so the lookup finds this mount whatever
+            // the temp dir resolves to. The subject is the fallback, not this
+            // machine's mount names.
+            __setMountTableReaderForTests(() => "/dev/root / virtiofs rw,relatime 0 0\n");
+
+            const db = openDatabase();
+
+            const mode = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
+            const sync = db.prepare("PRAGMA synchronous").get() as Record<string, number>;
+            expect(mode.journal_mode.toLowerCase()).toBe("delete");
+            // FULL, not NORMAL: NORMAL is corruption-safe only because of WAL.
+            expect(Object.values(sync)[0]).toBe(2);
+            expect(existsSync(resolveDbPath(dataHome))).toBe(true);
+        });
+
+        it("#when an existing WAL database moves onto that filesystem #then its WAL is checkpointed into the rollback journal", () => {
+            const dir = makeTempDir("storage-db-wal-to-delete-");
+            const dbPath = join(dir, "context.db");
+            const legacy = new Database(dbPath);
+            legacy.exec("PRAGMA journal_mode=WAL");
+            legacy.exec("CREATE TABLE legacy_rows(value TEXT)");
+            // One statement, written through exec: a prepared statement held
+            // across close() keeps the connection (and its WAL read locks) alive.
+            const values = Array.from({ length: 50 }, (_, i) => `('row-${i}')`).join(", ");
+            legacy.exec(`INSERT INTO legacy_rows(value) VALUES ${values}`);
+            closeQuietly(legacy);
+            __setMountTableReaderForTests(() => VIRTIOFS_MOUNT_TABLE);
+
+            const migrated = openDatabase(dbPath);
+
+            expect(migrated).not.toBeNull();
+            expect(journalModeName(migrated!)).toBe("delete");
+            // The switch checkpoints the WAL into the database and removes it.
+            expect(existsSync(`${dbPath}-wal`)).toBe(false);
+            const rows = migrated!
+                .prepare("SELECT value FROM legacy_rows ORDER BY value")
+                .all() as Array<{
+                value: string;
+            }>;
+            expect(rows).toHaveLength(50);
+            expect(rows.map((row) => row.value)).toContain("row-0");
+            expect(rows.map((row) => row.value)).toContain("row-49");
+            const integrity = migrated!.prepare("PRAGMA integrity_check").get() as Record<
+                string,
+                unknown
+            >;
+            expect(Object.values(integrity)[0]).toBe("ok");
         });
 
         it("#when called first time #then restricts storage dir to 0o700 and DB files to 0o600", () => {
