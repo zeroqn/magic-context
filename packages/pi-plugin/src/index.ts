@@ -1561,6 +1561,48 @@ async function startPiMagicContextRuntime(
 		// v2 ticket 02: the definitions, so a bound child can be served the three granted
 		// tools through the registry instead of loading Magic Context's factory itself.
 		tools: registeredTools,
+		// The tool bridge (wayfinder ticket 04): what a code-mode kernel may call from a cell. One
+		// policy answers both what is advertised and what may be called, so the two cannot drift.
+		// `pi.getAllTools()` is what this session was actually given — the definitions map holds
+		// every tool, while `sessionScopedToolsDisabled`, `compactionOff` and a disabled todowrite
+		// all narrow what pi ever saw. `memory.enabled` is the same session-scoped switch
+		// `session_start` consults to keep `ctx_memory` in or out of pi's active set (see
+		// `syncCtxMemoryToolEnabled`). `todowrite` is registered but not publishable, and the
+		// publication drops it even if this policy names it (ticket 09).
+		bridge: {
+			publishableNames: (ctx) => {
+				const memoryEnabled =
+					resolveCurrentProjectDeps(ctx).config.memory.enabled;
+				const registered = new Set(pi.getAllTools().map((tool) => tool.name));
+				return [...registeredTools.keys()].filter(
+					(name) =>
+						registered.has(name) && (name !== "ctx_memory" || memoryEnabled),
+				);
+			},
+			execute: async (name, params, ctx) => {
+				const definition = registeredTools.get(name);
+				if (!definition) {
+					// Unreachable through the bridge (a reader advertises what it may call) and
+					// answered rather than thrown, so a disagreement cannot take a cell down.
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Error: '${name}' is not available in this session.`,
+							},
+						],
+						details: undefined,
+					};
+				}
+				return definition.execute(
+					`bridge-${name}-${Date.now()}`,
+					params,
+					undefined,
+					undefined,
+					ctx,
+				);
+			},
+		},
 		registry: {
 			transformContext: async (event, ctx) => {
 				const sessionId = ctx?.sessionManager?.getSessionId?.();

@@ -14,18 +14,26 @@
  * also writes `parentSession`, so a `/fork` is indistinguishable from a child by header
  * alone — treating one as a child would hand a user's fork to another session's pipeline.
  */
-import { log } from "@magic-context/core/shared/logger";
+
 import type {
 	AgentToolResult,
 	ContextEvent,
 	ExtensionContext,
 	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { log } from "@magic-context/core/shared/logger";
 import {
 	CHILD_TOOL_ALLOWLIST,
 	markReducedSession,
 	unmarkReducedSession,
 } from "./pi-child-mode";
+import {
+	BRIDGE_API_VERSION,
+	BRIDGE_OWNER,
+	bridgeToolEntries,
+	isBridgePublishable,
+	publishBridgeTools,
+} from "./pi-tool-publication";
 
 export type PiToolResult = AgentToolResult<unknown>;
 
@@ -56,6 +64,23 @@ export interface PiMagicContextRegistry extends PiMagicContextWork {
 	 */
 	runTool(
 		toolName: string,
+		params: Record<string, unknown>,
+		ctx: ExtensionContext,
+	): Promise<PiToolResult>;
+}
+
+/**
+ * What a Magic Context instance offers the tool bridge (wayfinder ticket 04).
+ *
+ * Both members consult the *same* policy, so the catalogue can never advertise a tool that
+ * `execute` would refuse: `publishableNames` is the single answer to "may this session call this?".
+ * The bridge is additive — `runTool` above keeps its child allowlist untouched.
+ */
+export interface PiBridgeWork {
+	/** The tool names this session may be offered. */
+	publishableNames(ctx: ExtensionContext): string[];
+	execute(
+		name: string,
 		params: Record<string, unknown>,
 		ctx: ExtensionContext,
 	): Promise<PiToolResult>;
@@ -111,6 +136,23 @@ function resolve(ctx: unknown): Registration | undefined {
 }
 
 /**
+ * The one refusal the bridge can produce, and it should be unreachable: a reader advertises exactly
+ * what this instance granted. It exists because a caller must get an answer rather than a throw if
+ * the catalogue and the executor ever disagree.
+ */
+function bridgeRefusal(toolName: string, reason: string): PiToolResult {
+	return {
+		content: [
+			{
+				type: "text" as const,
+				text: `Error: '${toolName}' is not available — ${reason}.`,
+			},
+		],
+		details: undefined,
+	};
+}
+
+/**
  * Publishes this instance and returns the function that withdraws it. Idempotent, because
  * shutdown paths can run more than once.
  */
@@ -120,6 +162,8 @@ export function registerPiRegistry(options: {
 	registry: PiMagicContextWork;
 	/** The instance's registered tools, so a bound child can be served them. */
 	tools?: Map<string, ToolDefinition>;
+	/** Offer this instance's tools to a code-mode kernel. Absent means "publish nothing". */
+	bridge?: PiBridgeWork;
 }): () => void {
 	const registration: Registration = {
 		dbPath: options.dbPath,
@@ -214,7 +258,46 @@ export function registerPiRegistry(options: {
 	};
 	(globalThis as Record<symbol, unknown>)[REGISTRY_KEY] = facade;
 
+	// Offer this instance's tools to a code-mode kernel (wayfinder ticket 04). Published from here
+	// because resolution lives here: the publication answers only for the sessions *this* instance
+	// owns, so two instances in one process coexist without either answering for the other. The key
+	// identifies the instance, so a re-import replaces its own publication rather than adding one.
+	const bridge = options.bridge;
+	// One policy, filtered by the convention's own rule, feeding both halves of the offer: what the
+	// catalogue lists and what `execute` accepts are then the same set by construction.
+	const grantedNames = (ctx: ExtensionContext): string[] =>
+		(bridge?.publishableNames(ctx) ?? []).filter(isBridgePublishable);
+	const unpublishBridge = bridge
+		? publishBridgeTools(
+				`${BRIDGE_OWNER}\u0000${options.dbPath}\u0000${options.projectDir}`,
+				{
+					owner: BRIDGE_OWNER,
+					apiVersion: BRIDGE_API_VERSION,
+					catalogue: (ctx) =>
+						resolve(ctx) === registration
+							? bridgeToolEntries(
+									registration.tools,
+									grantedNames(ctx as ExtensionContext),
+								)
+							: [],
+					execute: async (name, params, ctx) => {
+						if (resolve(ctx) !== registration) {
+							return bridgeRefusal(
+								name,
+								"Magic Context has no instance serving this session",
+							);
+						}
+						if (!grantedNames(ctx as ExtensionContext).includes(name)) {
+							return bridgeRefusal(name, "not available in this session");
+						}
+						return bridge.execute(name, params, ctx as ExtensionContext);
+					},
+				},
+			)
+		: () => {};
+
 	return () => {
+		unpublishBridge();
 		registrations.delete(registration);
 		if (registrations.size === 0)
 			delete (globalThis as Record<symbol, unknown>)[REGISTRY_KEY];
