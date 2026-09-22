@@ -8,9 +8,9 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
+	__clearReducedSessionsForTests,
 	CHILD_TAG_SENTENCE,
 	CHILD_TOOL_ALLOWLIST,
-	__clearReducedSessionsForTests,
 	ensureChildTagSentence,
 	isReducedSession,
 	markReducedSession,

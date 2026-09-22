@@ -155,7 +155,6 @@ import {
 	resolveSessionId,
 } from "./commands/pi-command-utils";
 import { loadPiConfig, loadPiConfigDetailed } from "./config";
-import { ensurePiNativeConfigLink } from "./pi-native-config";
 import {
 	abortInFlightHistorians,
 	awaitInFlightHistorians,
@@ -210,6 +209,11 @@ import {
 } from "./model-chain-health";
 import { bootPiRuntimeWithDeadline } from "./pi-boot-deadline";
 import {
+	ensureChildTagSentence,
+	isReducedSession,
+	shouldLogTagSentence,
+} from "./pi-child-mode";
+import {
 	resolvePiUsableContextLimit,
 	resolvePiWindowGeometry,
 } from "./pi-context-limit";
@@ -219,6 +223,7 @@ import {
 } from "./pi-harness-kind";
 import { buildPiHistorianCommandOptions } from "./pi-historian-command-options";
 import { notePiLkgProviderUsage } from "./pi-lkg";
+import { ensurePiNativeConfigLink } from "./pi-native-config";
 import {
 	computePiPressure,
 	extractAssistantUsage,
@@ -239,6 +244,7 @@ import {
 	resolvePiProvenInputFloor,
 } from "./pi-proven-floor";
 import { abortInFlightRecomps, awaitInFlightRecomps } from "./pi-recomp-runner";
+import { registerPiRegistry } from "./pi-registry";
 import { handlePiProviderFailure } from "./provider-error-recovery-pi";
 import { bindStaleBuildNotice } from "./stale-build-notice";
 import { registerStatusLine, updateStatusLine } from "./status-line";
@@ -268,12 +274,6 @@ import {
 	prewarmPiTagSnapshot,
 } from "./tag-snapshot-pi";
 import { withTimeout } from "./timeout";
-import { registerPiRegistry } from "./pi-registry";
-import {
-	ensureChildTagSentence,
-	isReducedSession,
-	shouldLogTagSentence,
-} from "./pi-child-mode";
 import { registerMagicContextTools, syncCtxMemoryToolEnabled } from "./tools";
 import {
 	parseTodos,
