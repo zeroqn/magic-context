@@ -44,7 +44,6 @@ import {
 	renewCompartmentLease,
 } from "@magic-context/core/features/magic-context/compartment-lease";
 import { isFailClosedBlockingError } from "@magic-context/core/features/magic-context/fail-closed-block";
-import { isReducedSession } from "./pi-child-mode";
 import { resolveProjectIdentityForSession } from "@magic-context/core/features/magic-context/memory/project-identity";
 import {
 	clearSessionTracking,
@@ -198,7 +197,6 @@ import {
 } from "@magic-context/core/shared/tag-transcript";
 import { hasTrustedAbsoluteWall } from "@magic-context/core/shared/window-geometry";
 import { logSlowWriteTransaction } from "@magic-context/core/shared/write-transaction-timing";
-
 import {
 	clearAutoSearchForPiSession,
 	runAutoSearchHintForPi,
@@ -247,6 +245,7 @@ import {
 	authorizePiToolRemoval,
 } from "./native-replay-state-pi";
 import { hasVisibleNoteReadCallPi } from "./note-visibility-pi";
+import { isReducedSession } from "./pi-child-mode";
 import {
 	resolvePiUsableContextLimit,
 	resolvePiWindowGeometry,
@@ -2248,7 +2247,12 @@ function loadPiHistorianStateSnapshot(
 export function registerPiContextHandler(
 	pi: ExtensionAPI,
 	baseOptions: PiContextHandlerOptions,
-): { runContextPass: (event: ContextEvent, ctx: ExtensionContext) => Promise<{ messages: ContextEvent["messages"] } | undefined> } {
+): {
+	runContextPass: (
+		event: ContextEvent,
+		ctx: ExtensionContext,
+	) => Promise<{ messages: ContextEvent["messages"] } | undefined>;
+} {
 	const tagger = createTagger();
 	const lkgCoordinator = createPiLkgCoordinator(
 		baseOptions.db,
@@ -5282,7 +5286,7 @@ async function runPipeline(args: RunPipelineArgs): Promise<RunPipelineResult> {
 				sessionLog(args.sessionId, warning),
 		});
 	let protectionFloorResolution = resolveProtectionFloor();
-	let shouldRunHeuristics =
+	const shouldRunHeuristics =
 		args.heuristics !== undefined &&
 		isCacheBustingPass &&
 		(rideSignals.publishedHistory ||

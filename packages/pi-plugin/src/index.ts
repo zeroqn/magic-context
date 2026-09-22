@@ -130,7 +130,6 @@ import {
 	sendCtxStatusMessage,
 } from "./commands/pi-command-utils";
 import { loadPiConfig } from "./config";
-import { ensurePiNativeConfigLink } from "./pi-native-config";
 import {
 	awaitInFlightHistorians,
 	clearContextHandlerSession,
@@ -166,6 +165,11 @@ import { ensureProjectRegisteredFromPiDirectory } from "./embedding-bootstrap";
 import { registerPiFailClosedSurface } from "./fail-closed-pi";
 import { bootPiRuntimeWithDeadline } from "./pi-boot-deadline";
 import {
+	ensureChildTagSentence,
+	isReducedSession,
+	shouldLogTagSentence,
+} from "./pi-child-mode";
+import {
 	resolvePiUsableContextLimit,
 	resolvePiWindowGeometry,
 } from "./pi-context-limit";
@@ -173,8 +177,10 @@ import {
 	type PiHarnessKind,
 	resolvePiHarnessDetection,
 } from "./pi-harness-kind";
+import { ensurePiNativeConfigLink } from "./pi-native-config";
 import { computePiPressure, extractAssistantUsage } from "./pi-pressure";
 import { abortInFlightRecomps, awaitInFlightRecomps } from "./pi-recomp-runner";
+import { registerPiRegistry } from "./pi-registry";
 import { handlePiProviderFailure } from "./provider-error-recovery-pi";
 import { readPiSessionMessages } from "./read-session-pi";
 import { registerStatusLine, updateStatusLine } from "./status-line";
@@ -191,12 +197,6 @@ import {
 	processSystemPromptForCache,
 } from "./system-prompt";
 import { withTimeout } from "./timeout";
-import { registerPiRegistry } from "./pi-registry";
-import {
-	ensureChildTagSentence,
-	isReducedSession,
-	shouldLogTagSentence,
-} from "./pi-child-mode";
 import { registerMagicContextTools, syncCtxMemoryToolEnabled } from "./tools";
 import {
 	parseTodos,
