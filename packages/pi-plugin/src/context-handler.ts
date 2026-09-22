@@ -261,6 +261,7 @@ import {
 	authorizePiToolRemoval,
 } from "./native-replay-state-pi";
 import { hasVisibleNoteReadCallPi } from "./note-visibility-pi";
+import { isReducedSession } from "./pi-child-mode";
 import {
 	resolvePiUsableContextLimit,
 	resolvePiWindowGeometry,
@@ -2301,7 +2302,12 @@ function loadPiHistorianStateSnapshot(
 export function registerPiContextHandler(
 	pi: ExtensionAPI,
 	baseOptions: PiContextHandlerOptions,
-): { runContextPass: (event: ContextEvent, ctx: ExtensionContext) => Promise<{ messages: ContextEvent["messages"] } | undefined> } {
+): {
+	runContextPass: (
+		event: ContextEvent,
+		ctx: ExtensionContext,
+	) => Promise<{ messages: ContextEvent["messages"] } | undefined>;
+} {
 	const tagger = createTagger();
 	const lkgCoordinator = createPiLkgCoordinator(
 		baseOptions.db,

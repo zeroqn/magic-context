@@ -35,7 +35,14 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
-const PI_NATIVE_PATH = join(homedir(), ".pi", "agent", "extension-configs", "magic-context", "magic-context.jsonc");
+const PI_NATIVE_PATH = join(
+	homedir(),
+	".pi",
+	"agent",
+	"extension-configs",
+	"magic-context",
+	"magic-context.jsonc",
+);
 
 /** Mirrors magic-context's homeDir(): HOME first, then os.homedir(). */
 function homeDir(): string {
