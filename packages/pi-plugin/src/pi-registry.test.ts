@@ -8,10 +8,10 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
-	__clearReducedSessionsForTests,
-	isReducedSession,
-} from "./pi-child-mode";
-import { __piRegistrySizeForTests, registerPiRegistry } from "./pi-registry";
+	__piRegistrySizeForTests,
+	isBoundChild,
+	registerPiRegistry,
+} from "./pi-registry";
 
 const KEY = Symbol.for("@cortexkit/magic-context:pi-registry");
 
@@ -277,9 +277,10 @@ describe("serving a bound child its three tools (v2 ticket 02)", () => {
 		expect((called as { ctx: unknown }).ctx).toBe(ctx);
 	});
 
-	it("marks a bound child reduced, and clears it when the child ends", () => {
+	it("derives reduced mode from the binding, and releases it with the child's file", () => {
 		const instance = fakeInstance("a");
 		const childId = "v2-child-reduced";
+		const childFile = `/sessions/${childId}.jsonl`;
 		registerPiRegistry({
 			dbPath: "/db",
 			projectDir: "/v2-w-reduced",
@@ -291,17 +292,94 @@ describe("serving a bound child its three tools (v2 ticket 02)", () => {
 				childSessionId: string;
 				cwd: string;
 			}) => void;
-			clearSession: (id: string) => void;
+			clearSession: (id: string, file?: string) => void;
 		};
-		__clearReducedSessionsForTests();
-		expect(isReducedSession(childId)).toBe(false);
+		expect(isBoundChild(fakeCtx(childId, childFile))).toBe(false);
 		facade.bindChild({
-			childSessionFile: `/sessions/${childId}.jsonl`,
+			childSessionFile: childFile,
 			childSessionId: childId,
 			cwd: "/v2-w-reduced",
 		});
-		expect(isReducedSession(childId)).toBe(true);
+		expect(isBoundChild(fakeCtx(childId, childFile))).toBe(true);
+		// The binding is keyed by the child's **file**. Releasing only the id is a silent no-op,
+		// which is what a second, id-keyed mark used to paper over (`zeroqn/pi`'s
+		// `.scratch/child-surface/` ticket 04).
 		facade.clearSession(childId);
-		expect(isReducedSession(childId)).toBe(false);
+		expect(isBoundChild(fakeCtx(childId, childFile))).toBe(true);
+		facade.clearSession(childId, childFile);
+		expect(isBoundChild(fakeCtx(childId, childFile))).toBe(false);
+	});
+
+	it("binds a child that carries no session id, and still serves it as a child", () => {
+		// What a *resumed* child looks like: rlm's own `bindChild` call passes the file and no id
+		// at all. Before this change the reduced mark was keyed by id, so such a child was served
+		// as a parent session — Magic Context's own log warned about exactly that case.
+		const instance = fakeInstance("a");
+		const file = "/sessions/resumed-child.jsonl";
+		registerPiRegistry({
+			dbPath: "/db-resumed",
+			projectDir: "/v2-w-resumed",
+			registry: instance.registry,
+		});
+		const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
+			bindChild: (i: {
+				childSessionFile: string;
+				parentSessionFile?: string;
+				cwd: string;
+			}) => void;
+			clearSession: (id: string, file?: string) => void;
+		};
+		expect(isBoundChild(fakeCtx("resumed-child", file))).toBe(false);
+		facade.bindChild({
+			childSessionFile: file,
+			parentSessionFile: "/sessions/root.jsonl",
+			cwd: "/v2-w-resumed",
+		});
+		expect(isBoundChild(fakeCtx("resumed-child", file))).toBe(true);
+		facade.clearSession("resumed-child", file);
+		expect(isBoundChild(fakeCtx("resumed-child", file))).toBe(false);
+	});
+
+	it("answers a child's todo capability from the instance that supplies one", () => {
+		const instance = fakeInstance("a");
+		const definition = { name: "todowrite" } as never;
+		const unpublish = registerPiRegistry({
+			dbPath: "/db-todo",
+			projectDir: "/w-todo",
+			registry: instance.registry,
+			childTodo: () => ({ definition, capture: () => undefined }),
+		});
+		try {
+			const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
+				childTodo: () =>
+					| { definition: unknown; capture: (m: unknown, c: unknown) => void }
+					| undefined;
+			};
+			// One value carrying both halves, so a shim can never register the tool without the
+			// capture (`zeroqn/pi`'s `.scratch/child-surface/` ticket 05).
+			expect(facade.childTodo()?.definition).toBe(definition);
+			expect(typeof facade.childTodo()?.capture).toBe("function");
+		} finally {
+			unpublish();
+		}
+	});
+
+	it("offers nothing when the instance supplies no todo capability", () => {
+		const instance = fakeInstance("a");
+		const unpublish = registerPiRegistry({
+			dbPath: "/db-bare",
+			projectDir: "/w-bare",
+			registry: instance.registry,
+		});
+		try {
+			const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
+				childTodo: () => unknown;
+			};
+			// An older bundle, or one whose `todowrite` is disabled: a child must then be offered
+			// no tool at all, rather than one whose state is never recorded.
+			expect(facade.childTodo()).toBeUndefined();
+		} finally {
+			unpublish();
+		}
 	});
 });
