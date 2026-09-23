@@ -43,7 +43,6 @@ import {
 	renewCompartmentLease,
 } from "@magic-context/core/features/magic-context/compartment-lease";
 import { isFailClosedBlockingError } from "@magic-context/core/features/magic-context/fail-closed-block";
-import { isReducedSession } from "./pi-child-mode";
 import {
 	isUsableProjectIdentity,
 	resolveProjectIdentityForSession,
@@ -336,7 +335,6 @@ import {
 	preparePiToolRemovalMeasurements,
 } from "./native-replay-state-pi";
 import { hasVisibleNoteReadCallPi } from "./note-visibility-pi";
-import { isReducedSession } from "./pi-child-mode";
 import {
 	PiContextBudget,
 	PI_CONTEXT_BUDGET,
@@ -408,6 +406,7 @@ import {
 	PiDegradedPassError,
 	PiStorageBusyError,
 } from "./pi-raw-fallback";
+import { isBoundChild } from "./pi-registry";
 import {
 	notePiPublicationIssue,
 	PiServedEnvelopeUnavailable,
@@ -5722,6 +5721,11 @@ export function registerPiContextHandler(
 					return undefined;
 				}
 			})();
+			// v2 ticket 02/03: a bound child is served in reduced mode. Note nudges exist to prompt
+			// the context owner, which a child is not, so they are withheld while compaction and the
+			// tag sentence stay. `.scratch/child-surface/` ticket 04 resolves this once, from the
+			// ctx: reduced mode *is* the binding, so it cannot disagree with who the registry serves.
+			const reduced = isBoundChild(ctx);
 			// Sticky reminders and the synthetic todo pair this pass adds or moves
 			// edit an earlier user or assistant message; the proactive thinking
 			// strip below needs to know.
@@ -5733,10 +5737,7 @@ export function registerPiContextHandler(
 			);
 			const tNoteNudges = performance.now();
 			try {
-				// v2 ticket 02/03: a bound child is served in reduced mode. Note nudges exist
-				// to prompt the context owner, which a child is not, so they are withheld while
-				// compaction and the tag sentence stay.
-				if (!options.compactionOff && !isReducedSession(sessionId)) {
+				if (!options.compactionOff && !reduced) {
 					outputMessages = applyNoteNudges({
 						sessionId,
 						db: options.db,
@@ -5771,7 +5772,7 @@ export function registerPiContextHandler(
 				options.autoSearch?.enabled &&
 				!options.compactionOff &&
 				result.prefixMutationAllowed &&
-				!isReducedSession(sessionId) &&
+				!reduced &&
 				budget.remainingWork() > PI_CONTEXT_BUDGET.searchMs
 			) {
 				guardSqliteTransformPass({
