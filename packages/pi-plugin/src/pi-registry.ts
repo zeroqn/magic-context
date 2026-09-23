@@ -22,11 +22,7 @@ import type {
 	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { log } from "@magic-context/core/shared/logger";
-import {
-	CHILD_TOOL_ALLOWLIST,
-	markReducedSession,
-	unmarkReducedSession,
-} from "./pi-child-mode";
+import { CHILD_TOOL_ALLOWLIST } from "./pi-child-mode";
 import {
 	BRIDGE_API_VERSION,
 	BRIDGE_OWNER,
@@ -55,7 +51,39 @@ export interface PiMagicContextWork {
 	clearSession(sessionId: string): void;
 }
 
+/**
+ * A bound child's `todowrite` capability — the definition and the capture in one value.
+ *
+ * One value, not two members, on purpose (`zeroqn/pi`'s `.scratch/child-surface/`, ticket 05):
+ * a child must never be given the tool without the capture, because a `todowrite` whose state
+ * is never recorded is exactly the failure this package's publication rules exist to prevent.
+ * The shim registers `definition` and forwards the child's `message_end` to `capture`.
+ */
+export interface PiChildTodoCapability {
+	/** This instance's own `todowrite` definition, exactly as it registers it for a root. */
+	definition: ToolDefinition;
+	/**
+	 * Capture one of the *child's* messages. The state lands under the child's own session
+	 * id — never the parent's, whose list a whole-list replacement would clobber — and the
+	 * human overlay is left alone, because a child has no UI and the overlay belongs to the
+	 * parent's session.
+	 */
+	capture(message: unknown, ctx: ExtensionContext): void;
+}
+
 export interface PiMagicContextRegistry extends PiMagicContextWork {
+	/**
+	 * A bound child's todo capability, or `undefined` when this instance cannot serve one.
+	 * Present only in bundles that know about children's `todowrite`; a shim must treat its
+	 * absence as "not offered" rather than registering a tool with nothing behind it.
+	 */
+	childTodo(): PiChildTodoCapability | undefined;
+	/**
+	 * Release a child. The **session file is the releasing key**: the binding is keyed by it,
+	 * so clearing only the id leaves the file bound forever and a later session reusing it would
+	 * be served as a child. Optional so an older caller still cleans its own session state.
+	 */
+	clearSession(sessionId: string, sessionFile?: string): void;
 	/**
 	 * Runs one allowlisted Magic Context tool on behalf of a bound child. The child's own
 	 * ctx travels with the call, so session-scoped tools resolve to the child's session
@@ -124,6 +152,27 @@ function sessionKeys(ctx: unknown): string[] {
 	return keys;
 }
 
+/**
+ * Whether this session is a bound child — the single answer to what used to be two facts.
+ *
+ * A session is bound iff one of its **own** keys (its session id or its file) is in a
+ * registration's `bound` set, which is exactly what `bindChild` writes. Deriving reduced mode
+ * from the binding rather than from a parallel id-keyed mark means a child that was bound
+ * without a session id — a resumed child, or a shim that could not read one — is served in
+ * reduced mode like any other, and `clearSession` releasing the file releases the mode with it.
+ *
+ * Deliberately **not** `resolve(ctx) !== undefined`: `resolve` falls back to "the only
+ * registration" for an unbound session, and that fallback must not make a root look like a child.
+ */
+export function isBoundChild(ctx: unknown): boolean {
+	const keys = sessionKeys(ctx);
+	if (keys.length === 0) return false;
+	for (const entry of registrations) {
+		for (const key of keys) if (entry.bound.has(key)) return true;
+	}
+	return false;
+}
+
 /** The instance that owns this session, if any. */
 function resolve(ctx: unknown): Registration | undefined {
 	const keys = sessionKeys(ctx);
@@ -164,6 +213,12 @@ export function registerPiRegistry(options: {
 	tools?: Map<string, ToolDefinition>;
 	/** Offer this instance's tools to a code-mode kernel. Absent means "publish nothing". */
 	bridge?: PiBridgeWork;
+	/**
+	 * A bound child's todo capability. Absent means this instance serves no child a
+	 * `todowrite` at all, which is the honest answer when the tool is disabled or nothing
+	 * registered it — better an absent name than one whose state is never recorded.
+	 */
+	childTodo?: () => PiChildTodoCapability | undefined;
 }): () => void {
 	const registration: Registration = {
 		dbPath: options.dbPath,
@@ -175,6 +230,7 @@ export function registerPiRegistry(options: {
 	registrations.add(registration);
 
 	const facade: PiMagicContextRegistry = {
+		childTodo: () => options.childTodo?.(),
 		transformContext: async (event, ctx) =>
 			resolve(ctx)?.registry.transformContext(event, ctx),
 		compact: async (ctx) => resolve(ctx)?.registry.compact(ctx),
@@ -201,19 +257,16 @@ export function registerPiRegistry(options: {
 						: [];
 			for (const entry of targets) for (const key of keys) entry.bound.add(key);
 			// v2 ticket 02/03: a bound child is served in reduced mode — compaction and the
-			// tag sentence, but none of the parent-oriented prompt surface. The pass decides
-			// by session id, so mark that too when the shim supplied it.
-			markReducedSession(input.childSessionId);
+			// tag sentence, but none of the parent-oriented prompt surface. The binding *is*
+			// the mark (`isBoundChild`), so there is nothing else to write here: the file key
+			// added above is the whole fact. `.scratch/child-surface/` ticket 04.
 			log(
-				`[magic-context][pi] bound child session ${keys[0]} to parent ${input.parentSessionFile ?? "(unknown)"} on ${targets.length} instance(s)`,
+				`[magic-context][pi] bound child session ${keys[0]} to parent ${input.parentSessionFile ?? "(unknown)"} on ${targets.length} instance(s) — a bound session is served in reduced mode`,
 			);
-			// Reduced mode is marked by session id, which only the shim can supply. Say so
-			// rather than failing silently: a child without it would quietly receive the
-			// parent-oriented prompt surface (v2 ticket 02/03).
 			log(
 				input.childSessionId
 					? `[magic-context][pi] child ${input.childSessionId} is served in reduced mode`
-					: "[magic-context][pi] child bound WITHOUT a session id — reduced mode not marked, the pass will treat it as a parent session",
+					: "[magic-context][pi] child bound WITHOUT a session id; reduced mode derives from the binding, so it is still served as a child",
 			);
 		},
 		runTool: async (toolName, params, ctx) => {
@@ -248,12 +301,17 @@ export function registerPiRegistry(options: {
 				ctx,
 			);
 		},
-		clearSession: (sessionId) => {
+		// Releasing a child means releasing its **binding**, which is keyed by the child's
+		// session file — the id alone used to be deleted here, which was a silent no-op and
+		// only appeared to work because a second, id-keyed mark released the session.
+		// `.scratch/child-surface/` ticket 04. The file is optional so an older caller still
+		// cleans its own session state; pass it and the binding goes with it.
+		clearSession: (sessionId, sessionFile) => {
 			for (const entry of registrations) {
 				entry.bound.delete(sessionId);
+				if (sessionFile !== undefined) entry.bound.delete(sessionFile);
 				entry.registry.clearSession(sessionId);
 			}
-			unmarkReducedSession(sessionId);
 		},
 	};
 	(globalThis as Record<symbol, unknown>)[REGISTRY_KEY] = facade;

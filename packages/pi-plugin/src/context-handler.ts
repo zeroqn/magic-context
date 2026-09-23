@@ -44,7 +44,6 @@ import {
 	renewCompartmentLease,
 } from "@magic-context/core/features/magic-context/compartment-lease";
 import { isFailClosedBlockingError } from "@magic-context/core/features/magic-context/fail-closed-block";
-import { isReducedSession } from "./pi-child-mode";
 import {
 	isUsableProjectIdentity,
 	resolveProjectIdentityForSession,
@@ -261,7 +260,6 @@ import {
 	authorizePiToolRemoval,
 } from "./native-replay-state-pi";
 import { hasVisibleNoteReadCallPi } from "./note-visibility-pi";
-import { isReducedSession } from "./pi-child-mode";
 import {
 	resolvePiUsableContextLimit,
 	resolvePiWindowGeometry,
@@ -283,6 +281,7 @@ import {
 	resolvePiPressureSnapshotWithEstimateGuard,
 } from "./pi-pressure";
 import { assertPiRawFallbackFits, PiStorageBusyError } from "./pi-raw-fallback";
+import { isBoundChild } from "./pi-registry";
 import { injectSyntheticTodowriteForPi } from "./pi-todo-inject";
 import {
 	applyPiProactiveThinkingStrip,
@@ -3460,12 +3459,14 @@ export function registerPiContextHandler(
 					return undefined;
 				}
 			})();
+			// v2 ticket 02/03: a bound child is served in reduced mode. Note nudges exist to prompt
+			// the context owner, which a child is not, so they are withheld while compaction and the
+			// tag sentence stay. `.scratch/child-surface/` ticket 04 resolves this once, from the
+			// ctx: reduced mode *is* the binding, so it cannot disagree with who the registry serves.
+			const reduced = isBoundChild(ctx);
 			const tNoteNudges = performance.now();
 			try {
-				// v2 ticket 02/03: a bound child is served in reduced mode. Note nudges exist
-				// to prompt the context owner, which a child is not, so they are withheld while
-				// compaction and the tag sentence stay.
-				if (!options.compactionOff && !isReducedSession(sessionId)) {
+				if (!options.compactionOff && !reduced) {
 					outputMessages = applyNoteNudges({
 						sessionId,
 						db: options.db,
@@ -3493,11 +3494,7 @@ export function registerPiContextHandler(
 			logTransformTiming(sessionId, "noteNudges", tNoteNudges);
 
 			const tAutoSearch = performance.now();
-			if (
-				options.autoSearch?.enabled &&
-				!options.compactionOff &&
-				!isReducedSession(sessionId)
-			) {
+			if (options.autoSearch?.enabled && !options.compactionOff && !reduced) {
 				try {
 					outputMessages = await runAutoSearchHintForPi({
 						sessionId,
