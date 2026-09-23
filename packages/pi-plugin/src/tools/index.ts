@@ -87,6 +87,14 @@ export interface RegisterToolsOptions {
 	sessionScopedToolsDisabled?: boolean;
 	/** When false, omit Magic Context's Pi todowrite tool entirely. */
 	todowriteEnabled?: boolean;
+	/**
+	 * The `todowrite` definition to register, when the caller already built one. `index.ts`
+	 * does, and offers the same object to a bound child (`zeroqn/pi`'s
+	 * `.scratch/child-surface/` ticket 05), so the root's tool and a child's offer can never
+	 * drift apart. Absent means build one here, which is what a caller with no child to serve
+	 * wants.
+	 */
+	todowriteDefinition?: ToolDefinition;
 	/** Main Pi entry registers /todos; lean subagent entries keep commands off. */
 	todowriteCommandEnabled?: boolean;
 	/** In compaction-off mode, omit ctx_reduce and keep the other Pi tools available. */
@@ -177,7 +185,7 @@ export function registerMagicContextTools(
 		// `todos` arg and echoes a pretty-printed JSON ack; `message_end`
 		// in index.ts snapshots `params.todos` into `session_meta.last_todo_state`
 		// for downstream synthesis. See `tools/todowrite.ts` header for rationale.
-		pi.registerTool(createTodowriteTool());
+		pi.registerTool(opts.todowriteDefinition ?? createTodowriteTool());
 		if (opts.todowriteCommandEnabled !== false) {
 			registerTodosCommand(pi);
 		}

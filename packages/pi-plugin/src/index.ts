@@ -166,7 +166,7 @@ import { registerPiFailClosedSurface } from "./fail-closed-pi";
 import { bootPiRuntimeWithDeadline } from "./pi-boot-deadline";
 import {
 	ensureChildTagSentence,
-	isReducedSession,
+	narrowCatalogueForChild,
 	shouldLogTagSentence,
 } from "./pi-child-mode";
 import {
@@ -180,7 +180,7 @@ import {
 import { ensurePiNativeConfigLink } from "./pi-native-config";
 import { computePiPressure, extractAssistantUsage } from "./pi-pressure";
 import { abortInFlightRecomps, awaitInFlightRecomps } from "./pi-recomp-runner";
-import { registerPiRegistry } from "./pi-registry";
+import { isBoundChild, registerPiRegistry } from "./pi-registry";
 import { handlePiProviderFailure } from "./provider-error-recovery-pi";
 import { readPiSessionMessages } from "./read-session-pi";
 import { registerStatusLine, updateStatusLine } from "./status-line";
@@ -205,6 +205,7 @@ import {
 	rememberTodowriteToolCallTodos,
 	setTodoSnapshot,
 } from "./tools/todo-view-pi";
+import { createTodowriteTool } from "./tools/todowrite";
 
 const PI_HARNESS_DETECTION = await resolvePiHarnessDetection();
 const PI_HARNESS_KIND = PI_HARNESS_DETECTION.kind;
@@ -1438,6 +1439,13 @@ async function startPiMagicContextRuntime(
 	const todowriteEnabled = bootProjectDeps.config.todowrite.enabled !== false;
 	const todowriteOverlayEnabled =
 		todowriteEnabled && bootProjectDeps.config.todowrite.overlay !== false;
+	// Built once, here, and handed to `registerMagicContextTools` so the root's tool and a
+	// bound child's offer are the *same* definition object rather than two from one factory.
+	// `.scratch/child-surface/` ticket 05: the child's tool can then never drift from the
+	// root's, and its `renderCall`/`renderResult` ride along uninvoked (a child has no UI).
+	const todowriteDefinition = todowriteEnabled
+		? createTodowriteTool()
+		: undefined;
 
 	// Register the agent-facing tools. Reuses the same business logic
 	// the OpenCode plugin uses (insertMemory, unifiedSearch, addNote, …)
@@ -1474,6 +1482,7 @@ async function startPiMagicContextRuntime(
 		resolveDreamerEnabled: (ctx) =>
 			resolveCurrentProjectDeps(ctx).dreamerEnabled,
 		todowriteEnabled,
+		todowriteDefinition,
 		compactionOff,
 		promptSurface: registrationPromptSurface,
 		promptSurfaceRuntime,
@@ -1574,10 +1583,15 @@ async function startPiMagicContextRuntime(
 				const memoryEnabled =
 					resolveCurrentProjectDeps(ctx).config.memory.enabled;
 				const registered = new Set(pi.getAllTools().map((tool) => tool.name));
-				return [...registeredTools.keys()].filter(
+				const parentNames = [...registeredTools.keys()].filter(
 					(name) =>
 						registered.has(name) && (name !== "ctx_memory" || memoryEnabled),
 				);
+				// A bound child may call exactly what the registry's own child allowlist grants,
+				// intersected with what its parent may call — so "a child's catalogue is a subset
+				// of its parent's" is an intersection rather than a coincidence, and one constant
+				// feeds both `runTool` and this catalogue. `.scratch/child-surface/` ticket 04.
+				return narrowCatalogueForChild(parentNames, isBoundChild(ctx));
 			},
 			execute: async (name, params, ctx) => {
 				const definition = registeredTools.get(name);
@@ -1603,6 +1617,36 @@ async function startPiMagicContextRuntime(
 				);
 			},
 		},
+		// `.scratch/child-surface/` ticket 05: a bound child's todo capability, both halves in
+		// one value. `undefined` when the tool is disabled or nothing built it, so a shim never
+		// offers a child a tool whose state it cannot record.
+		childTodo: () =>
+			todowriteDefinition
+				? {
+						definition: todowriteDefinition,
+						capture: (message, ctx) => {
+							const sessionId = ctx?.sessionManager?.getSessionId?.();
+							if (!sessionId) return;
+							try {
+								capturePiTodowriteMessageIfCompatible({
+									db,
+									sessionId,
+									message,
+									// The tool is only offered when it is registered, so the capture
+									// is on by construction.
+									todowriteEnabled: true,
+									// Deliberately absent: a child has no UI, and this updater
+									// belongs to the *parent's* session — calling it would render a
+									// child's state in a root's overlay.
+									todoOverlay: undefined,
+									persist: true,
+								});
+							} catch (err) {
+								warn("childTodo: capture failed:", err);
+							}
+						},
+					}
+				: undefined,
 		registry: {
 			transformContext: async (event, ctx) => {
 				const sessionId = ctx?.sessionManager?.getSessionId?.();
@@ -1610,9 +1654,13 @@ async function startPiMagicContextRuntime(
 				// v2 ticket 05: Magic Context owns the wording that explains its own surface,
 				// so the tag sentence is added here for a bound child and nowhere else. A pass
 				// that returned nothing still leaves the messages to attach it to.
-				if (!isReducedSession(sessionId)) return result;
+				//
+				// `.scratch/child-surface/` ticket 04: reduced mode is the *binding*, resolved
+				// once here from the ctx — no parallel id-keyed mark, so a child bound without a
+				// session id (a resumed child) is served as a child too.
+				if (!isBoundChild(ctx)) return result;
 				const base = result ?? { messages: event.messages };
-				const withTagSentence = ensureChildTagSentence(base, sessionId);
+				const withTagSentence = ensureChildTagSentence(base, true);
 				// Say what happened rather than failing silently: an un-injected sentence on a
 				// bound child is a capability the child was granted and does not know about.
 				// Once per child, since injection runs on every pass by design (the header of
