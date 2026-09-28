@@ -59,25 +59,12 @@ export interface PiMagicContextWork {
  * is never recorded is exactly the failure this package's publication rules exist to prevent.
  * The shim registers `definition` and forwards the child's `message_end` to `capture`.
  */
-export interface PiChildTodoCapability {
-	/** This instance's own `todowrite` definition, exactly as it registers it for a root. */
-	definition: ToolDefinition;
-	/**
-	 * Capture one of the *child's* messages. The state lands under the child's own session
-	 * id — never the parent's, whose list a whole-list replacement would clobber — and the
-	 * human overlay is left alone, because a child has no UI and the overlay belongs to the
-	 * parent's session.
-	 */
-	capture(message: unknown, ctx: ExtensionContext): void;
-}
-
 export interface PiMagicContextRegistry extends PiMagicContextWork {
 	/**
 	 * A bound child's todo capability, or `undefined` when this instance cannot serve one.
 	 * Present only in bundles that know about children's `todowrite`; a shim must treat its
 	 * absence as "not offered" rather than registering a tool with nothing behind it.
 	 */
-	childTodo(): PiChildTodoCapability | undefined;
 	/**
 	 * Release a child. The **session file is the releasing key**: the binding is keyed by it,
 	 * so clearing only the id leaves the file bound forever and a later session reusing it would
@@ -213,12 +200,6 @@ export function registerPiRegistry(options: {
 	tools?: Map<string, ToolDefinition>;
 	/** Offer this instance's tools to a code-mode kernel. Absent means "publish nothing". */
 	bridge?: PiBridgeWork;
-	/**
-	 * A bound child's todo capability. Absent means this instance serves no child a
-	 * `todowrite` at all, which is the honest answer when the tool is disabled or nothing
-	 * registered it — better an absent name than one whose state is never recorded.
-	 */
-	childTodo?: () => PiChildTodoCapability | undefined;
 }): () => void {
 	const registration: Registration = {
 		dbPath: options.dbPath,
@@ -230,7 +211,6 @@ export function registerPiRegistry(options: {
 	registrations.add(registration);
 
 	const facade: PiMagicContextRegistry = {
-		childTodo: () => options.childTodo?.(),
 		transformContext: async (event, ctx) =>
 			resolve(ctx)?.registry.transformContext(event, ctx),
 		compact: async (ctx) => resolve(ctx)?.registry.compact(ctx),

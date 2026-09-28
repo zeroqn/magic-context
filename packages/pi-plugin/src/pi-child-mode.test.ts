@@ -24,18 +24,15 @@ import {
 } from "./pi-child-mode";
 
 describe("the granted tool allowlist (v2 ticket 02)", () => {
-	it("is exactly the three tools, and never the withheld ones", () => {
+	it("is exactly the four tools, and never the withheld ones", () => {
 		expect([...CHILD_TOOL_ALLOWLIST].sort()).toEqual([
 			"ctx_expand",
 			"ctx_reduce",
 			"ctx_search",
-		]);
-		for (const withheld of [
-			"ctx_memory",
-			"ctx_note",
 			"todowrite",
-			"todo_view",
-		]) {
+		]);
+		// `zeroqn/pi` `.scratch/one-tool-surface/` ticket 06 moved `todowrite` in; the rest stay out.
+		for (const withheld of ["ctx_memory", "ctx_note", "todo_view"]) {
 			expect(CHILD_TOOL_ALLOWLIST.has(withheld)).toBe(false);
 		}
 	});
