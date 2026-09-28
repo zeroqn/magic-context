@@ -393,7 +393,13 @@ function estimateTextTagTokenCount(text: string): number {
     return estimateTokens(text);
 }
 
-function extractToolTagMetadata(part: unknown): {
+/**
+ * The name a tool part is filed under, its input size, and its input tokens.
+ *
+ * Exported for its own precedence test: `tagToolName` is an explicit filing name and wins over the
+ * transcript's word for the part (`zeroqn/pi .scratch/one-tool-surface/` ticket 03).
+ */
+export function extractToolTagMetadata(part: unknown): {
     toolName: string | null;
     inputByteSize: number;
     inputTokenCount: number;
@@ -402,14 +408,22 @@ function extractToolTagMetadata(part: unknown): {
         return { toolName: null, inputByteSize: 0, inputTokenCount: 0 };
     }
 
+    // `tagToolName` is an explicit filing name, and it wins: pi projects a tool-result part whose
+    // transcript name is not the interesting one — a code-mode cell that ran a `ctx_reduce` inside itself
+    // is a `python` result whose *content* is a reduction, and the reduce-specific housekeeping (tail
+    // hygiene, reclaim protection, tool tier) keys on this column
+    // (zeroqn/pi `.scratch/one-tool-surface/` ticket 03). The part's own `tool` stays the transcript's
+    // word for it, which is what the formatter and the historian read.
     const toolName =
-        typeof part.tool === "string"
-            ? part.tool
-            : typeof part.toolName === "string"
-              ? part.toolName
-              : typeof part.name === "string"
-                ? part.name
-                : null;
+        typeof part.tagToolName === "string"
+            ? part.tagToolName
+            : typeof part.tool === "string"
+              ? part.tool
+              : typeof part.toolName === "string"
+                ? part.toolName
+                : typeof part.name === "string"
+                  ? part.name
+                  : null;
     const state = isRecord(part.state) ? part.state : null;
     const input = state?.input ?? part.args ?? part.input ?? {};
     const serializedInput = serializeToolInput(input);

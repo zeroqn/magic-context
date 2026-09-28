@@ -426,3 +426,89 @@ describe("convertEntriesToRawMessagePage", () => {
 		expect(paged).toEqual(full);
 	});
 });
+
+describe("a cell's trace reaches the tag, not the transcript's word for it", () => {
+	function messageEntry(id: string, message: Record<string, unknown>) {
+		return { type: "message", id, message };
+	}
+
+	function parts(entries: Record<string, unknown>[]) {
+		const raws = convertEntriesToRawMessages(entries);
+		const fold = raws.find((raw) => String(raw.id).startsWith("synth-user-"));
+		return (fold?.parts ?? []) as Array<Record<string, unknown>>;
+	}
+
+	it("files a cell that ran ctx_reduce under ctx_reduce, while the transcript still says python", () => {
+		const projected = parts([
+			messageEntry("user-1", { role: "user", content: "kick off" }),
+			messageEntry("asst-1", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc-1", name: "python" }],
+			}),
+			messageEntry("tr-1", {
+				role: "toolResult",
+				toolCallId: "tc-1",
+				toolName: "python",
+				content: [{ type: "text", text: "dropped 3 tags" }],
+				details: {
+					cellCalls: [{ host: "tool", args: ["ctx_reduce", { drop: "3-5" }] }],
+				},
+			}),
+			messageEntry("asst-2", {
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+			}),
+		]);
+
+		const tool = projected.find((part) => part.type === "tool");
+		expect(tool?.tool).toBe("python");
+		expect(tool?.tagToolName).toBe("ctx_reduce");
+	});
+
+	it("adds nothing for a cell that ran no reduce, or for a message with no trace", () => {
+		const search = parts([
+			messageEntry("user-1", { role: "user", content: "kick off" }),
+			messageEntry("asst-1", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc-1", name: "python" }],
+			}),
+			messageEntry("tr-1", {
+				role: "toolResult",
+				toolCallId: "tc-1",
+				toolName: "python",
+				content: [{ type: "text", text: "searched" }],
+				details: {
+					cellCalls: [{ host: "tool", args: ["ctx_search", { query: "x" }] }],
+				},
+			}),
+			messageEntry("asst-2", {
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+			}),
+		]);
+		expect(search.find((part) => part.type === "tool")).not.toHaveProperty(
+			"tagToolName",
+		);
+
+		const plain = parts([
+			messageEntry("user-1", { role: "user", content: "kick off" }),
+			messageEntry("asst-1", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc-1", name: "read" }],
+			}),
+			messageEntry("tr-1", {
+				role: "toolResult",
+				toolCallId: "tc-1",
+				toolName: "read",
+				content: [{ type: "text", text: "output-1" }],
+			}),
+			messageEntry("asst-2", {
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+			}),
+		]);
+		expect(plain.find((part) => part.type === "tool")).not.toHaveProperty(
+			"tagToolName",
+		);
+	});
+});

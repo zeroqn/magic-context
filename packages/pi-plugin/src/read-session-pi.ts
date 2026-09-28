@@ -72,6 +72,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RawMessage } from "@magic-context/core/hooks/magic-context/read-session-raw";
 
+import { cellToolCalls } from "./cell-calls-pi";
+
 /**
  * Prefix for the synthetic-user RawMessage id emitted when a run of `toolResult`
  * entries is folded into a user turn (the toolResult→assistant transition). The
@@ -586,10 +588,23 @@ function synthesizeToolResultParts(msg: unknown): unknown[] {
 		output = fragments.join("\n");
 	}
 
+	// A cell can run a `ctx_reduce` inside itself, and then this part is the only record of it: the call a
+	// reader can see is code mode's `python`, so Magic Context's reduce-specific housekeeping — the tail
+	// hygiene that keeps the newest reduce results, the reclaim protection, the tool tier — would never see
+	// the reduction the cell performed (`.scratch/one-tool-surface/` ticket 03). `tagToolName` is the name
+	// the *tag* is filed under, while `tool` stays what the transcript actually says, because the historian
+	// and the formatter read that one (`read-session-formatting.ts:89`) and must not be told that a cell's
+	// output was a bare reduce call.
+	const tagToolName = cellToolCalls(msg).some(
+		(call) => call.name === "ctx_reduce",
+	)
+		? "ctx_reduce"
+		: undefined;
 	return [
 		{
 			type: "tool",
 			tool,
+			...(tagToolName ? { tagToolName } : {}),
 			callID,
 			state: {
 				output,
