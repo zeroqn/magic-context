@@ -23,7 +23,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import {
 	isCompactionEnabled,
 	isDreamerRunnable,
@@ -193,7 +197,11 @@ import {
 	noteRawBranchEstimateSetAside,
 } from "./pi-pressure";
 import { abortInFlightRecomps, awaitInFlightRecomps } from "./pi-recomp-runner";
-import { isBoundChild, registerPiRegistry } from "./pi-registry";
+import {
+	isBoundChild,
+	type PiToolResult,
+	registerPiRegistry,
+} from "./pi-registry";
 import { handlePiProviderFailure } from "./provider-error-recovery-pi";
 import { readPiSessionMessages } from "./read-session-pi";
 import { registerStatusLine, updateStatusLine } from "./status-line";
@@ -488,6 +496,193 @@ export function capturePiTodowriteMessageIfCompatible(args: {
 	}
 
 	return false;
+}
+
+/**
+ * Magic Context's call-side effects, in one place, for **both** routes a call can take
+ * (wayfinder tickets 01/02 in zeroqn/pi's `.scratch/one-tool-surface/`).
+ *
+ * Pi's dispatch reaches these through the `tool_execution_*` handlers below. A code-mode cell reaches
+ * the same tool through the tool bridge's `execute` instead — and produces no pi event by that name,
+ * because the transcript block it leaves is `python`. So a body inlined in a handler ran for one route
+ * and was silently skipped for the other: `ctx_note`'s nudge clearing and `ctx_reduce`'s Channel-1
+ * mark were already unobserved in every bridged root session for exactly this reason, and the
+ * `todowrite` capture would have gone the same way the moment the tool was published.
+ *
+ * Both entry points therefore call these two functions, and the name-keyed knowledge lives here rather
+ * than twice: a name added here is wired for both routes at once, and a name neither entry point knows
+ * is a name neither route observes.
+ *
+ * Failure is swallowed by design. On the dispatch route this is opportunistic — a throw must not break
+ * the agent loop — and on the bridge route it must not take a cell down after its tool has run.
+ */
+export function observePiToolCallStart(args: {
+	db: ContextDatabase;
+	sessionId: string;
+	name: string;
+	args: unknown;
+	toolCallId?: string;
+	todowriteEnabled: boolean;
+	/**
+	 * Resolved by the *caller*, because it is a property of the session shape rather than of the call:
+	 * a caller serving a **bound child** passes `undefined` — a child has no UI, and this updater
+	 * belongs to the parent's session, so calling it would render a child's state in a root's overlay
+	 * (`.scratch/child-surface/` ticket 05).
+	 */
+	todoOverlay?: TodoOverlayUpdater;
+	compactionOff: boolean;
+}): void {
+	try {
+		if (args.name === "todowrite") {
+			const todos = (
+				args.args as { todos?: Array<{ status?: string }> } | undefined
+			)?.todos;
+			const sessionMeta = Array.isArray(todos)
+				? getOrCreateSessionMeta(args.db, args.sessionId)
+				: null;
+
+			// Synthetic-todowrite snapshot capture (Pi parity with OpenCode
+			// hook-handlers.ts:386-401). Persist normalized state on EVERY todowrite call so the
+			// transform-time injection path always has a current snapshot to replay on the next
+			// cache-busting pass. Render-safe: this only stores validated todos in shared session
+			// state and the local tool-call cache; it does not mutate Pi messages. Subagents skip —
+			// they do not get synthetic todowrite injection. Foreign Pi extensions can share the
+			// `todowrite` name, so only the exact Magic Context todo shape updates the stored
+			// snapshot.
+			capturePiTodowriteArgsIfCompatible({
+				db: args.db,
+				sessionId: args.sessionId,
+				todos,
+				todowriteEnabled: args.todowriteEnabled,
+				todoOverlay: args.todoOverlay,
+				persist: Boolean(sessionMeta && !sessionMeta.isSubagent),
+				toolCallId: args.toolCallId,
+			});
+
+			// `todos_complete` fires only when EVERY item is terminal (`completed` or `cancelled`):
+			// firing on every todowrite is too eager, since agents call it repeatedly during work to
+			// mark intermediate progress.
+			if (
+				Array.isArray(todos) &&
+				todos.length > 0 &&
+				todos.every((t) => t.status === "completed" || t.status === "cancelled")
+			) {
+				if (!args.compactionOff && sessionMeta && !sessionMeta.isSubagent) {
+					onNoteTrigger(args.db, args.sessionId, "todos_complete");
+				}
+			}
+		} else if (args.name === "ctx_note") {
+			// Any `ctx_note` action (read or write) means the agent already saw / acted on notes, so
+			// the pending sticky reminder for this session dies right away. Mirrors OpenCode's
+			// `if (typedInput.tool === "ctx_note") clearNoteNudgeState(...)`.
+			clearNoteNudgeTriggerAndCooldown(args.db, args.sessionId);
+		}
+	} catch (err) {
+		warn(`observePiToolCallStart(${args.name}) failed (continuing):`, err);
+	}
+}
+
+/**
+ * The call's *end*, which is where pi marks a `ctx_reduce` (see `observePiToolCallStart` for why this
+ * is one function for both routes).
+ *
+ * A cell-routed reduce is marked here *before* the `python` tool result reaches the Channel-1
+ * machinery, so that result is measured against a state that already knows a reduction happened — the
+ * same ordering the dispatch route has, where `tool_execution_end` precedes `tool_result`.
+ */
+export function observePiToolCallEnd(args: {
+	db: ContextDatabase;
+	sessionId: string;
+	name: string;
+	compactionOff: boolean;
+}): void {
+	try {
+		if (!args.compactionOff && args.name === "ctx_reduce") {
+			markPiChannel1Reduced(args.sessionId, args.db);
+		}
+	} catch (err) {
+		warn(`observePiToolCallEnd(${args.name}) failed (continuing):`, err);
+	}
+}
+
+/**
+ * Run one **cell-routed** call — a pi tool a code-mode cell reached through the tool bridge.
+ *
+ * This is the second entrance to the observers above, and a named function rather than a closure body
+ * so the wiring is testable: the factory's `bridge.execute` resolves nothing and delegates here, so a
+ * test drives the same function with the same arguments and "a cell-routed call is observed" is pinned
+ * by a test instead of by reading the factory.
+ *
+ * A name this instance holds no definition for is *answered* rather than thrown: the reader advertises
+ * what `execute` accepts, so it is unreachable through the bridge, and a disagreement must not take a
+ * cell down.
+ */
+export async function executePublishedToolCall(args: {
+	db: ContextDatabase;
+	name: string;
+	params: Record<string, unknown>;
+	ctx: ExtensionContext;
+	definitions: Map<string, ToolDefinition>;
+	todowriteEnabled: boolean;
+	todoOverlay?: TodoOverlayUpdater;
+	compactionOff: boolean;
+}): Promise<PiToolResult> {
+	const definition = args.definitions.get(args.name);
+	if (!definition) {
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: `Error: '${args.name}' is not available in this session.`,
+				},
+			],
+			details: undefined,
+		};
+	}
+
+	// A cell-routed call is a call: run the observers pi's dispatch would have run for this name, so
+	// the two routes cannot drift and no owner has to remember which of its effects live in `execute`
+	// and which in pi's dispatch (`.scratch/one-tool-surface/` tickets 01/02). The name-keyed knowledge
+	// lives in `observePiToolCall*`, so a name added there is wired for both routes at once.
+	const sessionId = args.ctx?.sessionManager?.getSessionId?.();
+	if (sessionId) {
+		observePiToolCallStart({
+			db: args.db,
+			sessionId,
+			name: args.name,
+			args: args.params,
+			// No pi component renders a cell's call, so there is no `toolCallId` for the render cache
+			// to key on — the shape the `message_end` capture route already passes, where
+			// `rememberTodowriteToolCallTodos` returns early.
+			toolCallId: undefined,
+			todowriteEnabled: args.todowriteEnabled,
+			// A bound child's call must not move the *root's* overlay: a child has no UI, and this
+			// updater belongs to the parent's session (`.scratch/child-surface/` ticket 05).
+			todoOverlay: isBoundChild(args.ctx) ? undefined : args.todoOverlay,
+			compactionOff: args.compactionOff,
+		});
+	}
+	try {
+		return await definition.execute(
+			`bridge-${args.name}-${Date.now()}`,
+			args.params,
+			undefined,
+			undefined,
+			args.ctx,
+		);
+	} finally {
+		// In `finally`, because pi also ends a tool that threw: its agent loop catches the error and
+		// emits `tool_execution_end` anyway, so the dispatch route's mark lands for a failing reduce
+		// too.
+		if (sessionId) {
+			observePiToolCallEnd({
+				db: args.db,
+				sessionId,
+				name: args.name,
+				compactionOff: args.compactionOff,
+			});
+		}
+	}
 }
 
 function info(message: string, data?: unknown): void {
@@ -1744,7 +1939,10 @@ async function startPiMagicContextRuntime(
 		// all narrow what pi ever saw. `memory.enabled` is the same session-scoped switch
 		// `session_start` consults to keep `ctx_memory` in or out of pi's active set (see
 		// `syncCtxMemoryToolEnabled`). `todowrite` is registered but not publishable, and the
-		// publication drops it even if this policy names it (ticket 09).
+		// publication drops it even if this policy names it (ticket 09) — because until it *is*
+		// publishable, its effect is pi's dispatch. That is what `execute` below closes: a published
+		// name's call runs the same observers pi's dispatch runs for it, so an effect that used to be
+		// dispatch-only is produced on this route too (`.scratch/one-tool-surface/` tickets 01/02).
 		bridge: {
 			publishableNames: (ctx) => {
 				const memoryEnabled =
@@ -1760,29 +1958,17 @@ async function startPiMagicContextRuntime(
 				// feeds both `runTool` and this catalogue. `.scratch/child-surface/` ticket 04.
 				return narrowCatalogueForChild(parentNames, isBoundChild(ctx));
 			},
-			execute: async (name, params, ctx) => {
-				const definition = registeredTools.get(name);
-				if (!definition) {
-					// Unreachable through the bridge (a reader advertises what it may call) and
-					// answered rather than thrown, so a disagreement cannot take a cell down.
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: `Error: '${name}' is not available in this session.`,
-							},
-						],
-						details: undefined,
-					};
-				}
-				return definition.execute(
-					`bridge-${name}-${Date.now()}`,
+			execute: (name, params, ctx) =>
+				executePublishedToolCall({
+					db,
+					name,
 					params,
-					undefined,
-					undefined,
 					ctx,
-				);
-			},
+					definitions: registeredTools,
+					todowriteEnabled,
+					todoOverlay,
+					compactionOff,
+				}),
 		},
 		// `.scratch/child-surface/` ticket 05: a bound child's todo capability, both halves in
 		// one value. `undefined` when the tool is disabled or nothing built it, so a shim never
@@ -2496,81 +2682,30 @@ async function startPiMagicContextRuntime(
 		}
 	});
 
-	// Tool-execution-start hook: detect note-nudge triggers from
-	// agent tool usage. Mirrors OpenCode's `tool.execute.after` hook in
-	// `hook-handlers.ts` (`createToolExecuteAfterHook`). We use Pi's
-	// `tool_execution_start` event because (a) it fires before the tool
-	// runs (so we can inspect args without waiting for output, matching
-	// OpenCode's `tool.execute.before`/`after` that have full args
-	// available), and (b) `tool_execution_end` is fire-and-forget and
-	// could race with the next pipeline pass.
+	// Tool-execution hooks: Magic Context's call-side effects. The bodies live in
+	// `observePiToolCallStart` / `observePiToolCallEnd`, so a **cell-routed** call — which reaches the
+	// same tool through the tool bridge and leaves a `python` block rather than a call by that name —
+	// runs the same ones. `.scratch/one-tool-surface/` tickets 01/02: before that, the bodies were
+	// inlined here, and a bridged `ctx_note` / `ctx_reduce` was silently unobserved.
 	//
-	// What we wire:
-	//
-	//   - `todowrite` with all-terminal todos → `todos_complete` trigger.
-	//     The agent's `todos` arg is an array of {id, content, status}
-	//     items. Note nudges should fire only when EVERY item is in a
-	//     terminal state (`completed` or `cancelled`) — firing on every
-	//     todowrite is too eager since agents call it repeatedly during
-	//     work to mark intermediate progress.
-	//
-	//   - `ctx_note` (any action) → `clearNoteNudgeState(sessionId)`.
-	//     The agent already saw / acted on notes, so we kill any
-	//     pending sticky reminder for this session right away. Subagents
-	//     never deliver note nudges (gated upstream in postprocess),
-	//     so we still skip the trigger for them. Mirrors OpenCode's
-	//     `if (typedInput.tool === "ctx_note") clearNoteNudgeState(...)`.
+	// `tool_execution_start` carries the args before the tool runs, which is what the `todowrite`
+	// capture wants; `tool_execution_end` is where a `ctx_reduce` is marked. Mirrors OpenCode's
+	// `tool.execute.before` / `.after` pair in `hook-handlers.ts`.
 	pi.on("tool_execution_start", async (event, ctx) => {
 		try {
-			const sessionId = ctx.sessionManager.getSessionId();
-			if (event.toolName === "todowrite") {
-				const todoArgs = event.args as
-					| { todos?: Array<{ status?: string }> }
-					| undefined;
-				const toolCallId =
+			observePiToolCallStart({
+				db,
+				sessionId: ctx.sessionManager.getSessionId(),
+				name: event.toolName,
+				args: event.args,
+				toolCallId:
 					typeof (event as { toolCallId?: unknown }).toolCallId === "string"
 						? (event as { toolCallId: string }).toolCallId
-						: undefined;
-				const todos = todoArgs?.todos;
-				const sessionMeta = Array.isArray(todos)
-					? getOrCreateSessionMeta(db, sessionId)
-					: null;
-
-				// Synthetic-todowrite snapshot capture (Pi parity with
-				// OpenCode hook-handlers.ts:386-401). Persist normalized
-				// state on EVERY todowrite call so the transform-time
-				// injection path in pi-pipeline.ts always has a current
-				// snapshot to replay on the next cache-busting pass.
-				// Render-safe: this only stores validated todos in shared
-				// session state and the local tool-call cache; it does not
-				// mutate Pi messages. Subagents skip — they do not get synthetic
-				// todowrite injection. Foreign Pi extensions can share the
-				// `todowrite` name, so only the exact Magic Context todo
-				// shape updates the stored snapshot.
-				capturePiTodowriteArgsIfCompatible({
-					db,
-					sessionId,
-					todos,
-					todowriteEnabled,
-					todoOverlay,
-					persist: Boolean(sessionMeta && !sessionMeta.isSubagent),
-					toolCallId,
-				});
-
-				if (
-					Array.isArray(todos) &&
-					todos.length > 0 &&
-					todos.every(
-						(t) => t.status === "completed" || t.status === "cancelled",
-					)
-				) {
-					if (!compactionOff && sessionMeta && !sessionMeta.isSubagent) {
-						onNoteTrigger(db, sessionId, "todos_complete");
-					}
-				}
-			} else if (event.toolName === "ctx_note") {
-				clearNoteNudgeTriggerAndCooldown(db, sessionId);
-			}
+						: undefined,
+				todowriteEnabled,
+				todoOverlay,
+				compactionOff,
+			});
 		} catch (err) {
 			// tool-event hook is opportunistic; failure should not break
 			// the agent loop.
@@ -2584,9 +2719,12 @@ async function startPiMagicContextRuntime(
 		try {
 			const sessionId = ctx.sessionManager.getSessionId();
 			if (typeof sessionId !== "string" || sessionId.length === 0) return;
-			if (!compactionOff && event.toolName === "ctx_reduce") {
-				markPiChannel1Reduced(sessionId, db);
-			}
+			observePiToolCallEnd({
+				db,
+				sessionId,
+				name: event.toolName,
+				compactionOff,
+			});
 		} catch (err) {
 			log(
 				`tool_execution_end hook failed (continuing): ${err instanceof Error ? err.message : String(err)}`,
