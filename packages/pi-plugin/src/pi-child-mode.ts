@@ -28,11 +28,20 @@
  * no kernel it named tools the child had no way to call at all.
  */
 
-/** v2 ticket 02: the only tool names a bound child may reach. */
+/**
+ * v2 ticket 02: the only tool names a bound child may reach.
+ *
+ * **Amended by `zeroqn/pi`'s `.scratch/one-tool-surface/` ticket 06**: `todowrite` joins them. A child
+ * used to *hold* it as a real pi tool, registered by the bridge owner's shim from a capability the
+ * registry handed over; now it is published like the rest, so the child reaches it from its own cell as
+ * `await tool("todowrite", …)` — one route instead of two, and a child's surface of `["python"]` alone.
+ * These four names are therefore the catalogue, not a surface.
+ */
 export const CHILD_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
 	"ctx_search",
 	"ctx_reduce",
 	"ctx_expand",
+	"todowrite",
 ]);
 
 /**

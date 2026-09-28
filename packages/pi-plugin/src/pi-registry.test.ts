@@ -339,47 +339,4 @@ describe("serving a bound child its three tools (v2 ticket 02)", () => {
 		facade.clearSession("resumed-child", file);
 		expect(isBoundChild(fakeCtx("resumed-child", file))).toBe(false);
 	});
-
-	it("answers a child's todo capability from the instance that supplies one", () => {
-		const instance = fakeInstance("a");
-		const definition = { name: "todowrite" } as never;
-		const unpublish = registerPiRegistry({
-			dbPath: "/db-todo",
-			projectDir: "/w-todo",
-			registry: instance.registry,
-			childTodo: () => ({ definition, capture: () => undefined }),
-		});
-		try {
-			const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
-				childTodo: () =>
-					| { definition: unknown; capture: (m: unknown, c: unknown) => void }
-					| undefined;
-			};
-			// One value carrying both halves, so a shim can never register the tool without the
-			// capture (`zeroqn/pi`'s `.scratch/child-surface/` ticket 05).
-			expect(facade.childTodo()?.definition).toBe(definition);
-			expect(typeof facade.childTodo()?.capture).toBe("function");
-		} finally {
-			unpublish();
-		}
-	});
-
-	it("offers nothing when the instance supplies no todo capability", () => {
-		const instance = fakeInstance("a");
-		const unpublish = registerPiRegistry({
-			dbPath: "/db-bare",
-			projectDir: "/w-bare",
-			registry: instance.registry,
-		});
-		try {
-			const facade = (globalThis as Record<symbol, unknown>)[KEY] as {
-				childTodo: () => unknown;
-			};
-			// An older bundle, or one whose `todowrite` is disabled: a child must then be offered
-			// no tool at all, rather than one whose state is never recorded.
-			expect(facade.childTodo()).toBeUndefined();
-		} finally {
-			unpublish();
-		}
-	});
 });

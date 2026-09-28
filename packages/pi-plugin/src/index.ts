@@ -1993,36 +1993,6 @@ async function startPiMagicContextRuntime(
 					compactionOff,
 				}),
 		},
-		// `.scratch/child-surface/` ticket 05: a bound child's todo capability, both halves in
-		// one value. `undefined` when the tool is disabled or nothing built it, so a shim never
-		// offers a child a tool whose state it cannot record.
-		childTodo: () =>
-			todowriteDefinition
-				? {
-						definition: todowriteDefinition,
-						capture: (message, ctx) => {
-							const sessionId = ctx?.sessionManager?.getSessionId?.();
-							if (!sessionId) return;
-							try {
-								capturePiTodowriteMessageIfCompatible({
-									db,
-									sessionId,
-									message,
-									// The tool is only offered when it is registered, so the capture
-									// is on by construction.
-									todowriteEnabled: true,
-									// Deliberately absent: a child has no UI, and this updater
-									// belongs to the *parent's* session — calling it would render a
-									// child's state in a root's overlay.
-									todoOverlay: undefined,
-									persist: true,
-								});
-							} catch (err) {
-								warn("childTodo: capture failed:", err);
-							}
-						},
-					}
-				: undefined,
 		registry: {
 			transformContext: async (event, ctx) => {
 				const sessionId = ctx?.sessionManager?.getSessionId?.();
