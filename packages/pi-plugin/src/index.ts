@@ -225,6 +225,7 @@ import {
 	registerTodoStateLifecycle,
 	rememberTodowriteToolCallTodos,
 	setTodoSnapshot,
+	TODO_TOOL_NAME,
 } from "./tools/todo-view-pi";
 import { createTodowriteTool } from "./tools/todowrite";
 
@@ -683,6 +684,28 @@ export async function executePublishedToolCall(args: {
 			});
 		}
 	}
+}
+
+/**
+ * Whether the model needs Magic Context's own todo-list wording (wayfinder ticket 04 in
+ * `.scratch/one-tool-surface/`).
+ *
+ * Pi injects a tool's `snippet` and `promptGuidelines` **only while it is active**, so when the tool
+ * bridge's surface rule strips `todowrite` — because a cell can reach it, which is what *published*
+ * means — its four guidelines leave the prompt with it. Magic Context's ambient prompt is then the only
+ * place left to say the discipline, and this is the gate that makes that additive rather than
+ * duplicated: the wording appears exactly when pi's own has gone.
+ *
+ * The question is asked of pi's **active set** rather than of the publication policy, because the tool
+ * being *publishable* is not the fact that matters — the fact that matters is that it is no longer
+ * offered to the model. A session with no bridge entry, or a child, or a configuration that never
+ * strips it, keeps pi's own guidelines and gets nothing from here.
+ */
+export function isTodoListDisciplineNeeded(args: {
+	todowriteEnabled: boolean;
+	activeTools: readonly string[];
+}): boolean {
+	return args.todowriteEnabled && !args.activeTools.includes(TODO_TOOL_NAME);
 }
 
 function info(message: string, data?: unknown): void {
@@ -2528,6 +2551,13 @@ async function startPiMagicContextRuntime(
 				includeGuidance: true,
 				protectedTags: effectiveConfig.protected_tags,
 				ctxReduceCallable: !compactionOff,
+				// A published tool's discipline is the owner's to say: pi's own guidelines for
+				// `todowrite` go with the tool when the surface rule strips it, and this clause
+				// takes their place exactly then (`isTodoListDisciplineNeeded`).
+				todoListCallable: isTodoListDisciplineNeeded({
+					todowriteEnabled,
+					activeTools: pi.getActiveTools(),
+				}),
 				dreamerEnabled: effectiveProjectDeps.dreamerEnabled,
 				temporalAwarenessEnabled: effectiveConfig.temporal_awareness ?? false,
 				cavemanTextCompressionEnabled:

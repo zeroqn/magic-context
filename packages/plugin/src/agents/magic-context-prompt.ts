@@ -154,6 +154,21 @@ A cleared item leaves \`[dropped §N§]\` or disappears; that is housekeeping, n
 
 const CAVEMAN_COMPRESSION_WARNING = `\n**BEWARE**: History compression is on; older user AND assistant text — including your own earlier responses — has been deterministically rewritten in a terse caveman style (dropped articles, missing auxiliaries, \`//\` instead of connectives like \`because\`). This is automatic context compression that runs after the fact, not your actual prior wording or the user's. **DO NOT mimic this style in new turns.** Write fresh responses in normal prose. If you notice your output drifting into caveman cadence, that drift is in-context-learning bleeding from the compressed history — consciously revert to full sentences.`;
 
+/**
+ * The todo-list discipline, for a session where `todowrite` is **published to a cell** rather than
+ * offered as a pi tool.
+ *
+ * Pi injects a tool's `snippet` and `promptGuidelines` only while that tool is *active*, so the moment
+ * the tool bridge's surface rule strips `todowrite` its own four guidelines leave the prompt with it.
+ * This is the owner's replacement wording: the same discipline, addressed to the lane the tool is
+ * actually reachable from (`.scratch/one-tool-surface/` ticket 04, whose premise is that an owner whose
+ * tool is published says the words itself).
+ *
+ * Appended to the primary guidance only: a subagent has no todo tool, and a user's `primary_guidance`
+ * override owns the section's voice while the mechanics stay composer-owned.
+ */
+const TODO_LIST_GUIDANCE = `\nWhen work spans three or more steps, when the user gives you several tasks, or when you are tracking progress across a verify/fix loop, keep a todo list and update it with \`await tool("todowrite", todos=[…])\` from a cell. Pass the COMPLETE updated list every time — it replaces the prior list rather than appending to it — including pending, in_progress, completed and cancelled items that should remain visible. Mark exactly one todo \`in_progress\` before starting it, mark items \`completed\` as soon as they are done, and use \`cancelled\` only for work that is no longer needed. Never mark a todo completed while verification is failing, the implementation is partial, or an unresolved blocker remains — keep it \`in_progress\` and add or update a todo for the blocker.`;
+
 export function buildMagicContextSection(
     _agent: string | null,
     _legacyProtectionCount: number,
@@ -166,6 +181,11 @@ export function buildMagicContextSection(
     memoryEnabled = true,
     preset: PromptSurfacePreset = "full",
     primaryOverride?: string,
+    /**
+     * Whether the todo list is reachable as a *cell* tool (`await tool("todowrite", …)`) rather than as
+     * an active pi tool. True emits the owner's replacement wording (see `TODO_LIST_GUIDANCE`).
+     */
+    todoListCallable = false,
 ): string {
     // Subagent sessions: minimal §N§ + ctx_reduce mechanics only. Bypasses the
     // long-term-partner frame, memory/search/note guidance, and the reduction
@@ -186,22 +206,25 @@ export function buildMagicContextSection(
     const cavemanWarning = cavemanTextCompressionEnabled ? CAVEMAN_COMPRESSION_WARNING : "";
     const languageDirective = buildPrimaryLanguageDirective(language);
     const languageGuidance = languageDirective ? `\n\n${languageDirective}` : "";
+    // Composer-owned mechanics, emitted wherever the primary section goes — including an override, which
+    // owns the section's voice but not what the tools on this surface require the agent to do.
+    const todoListGuidance = todoListCallable ? TODO_LIST_GUIDANCE : "";
 
     if (primaryOverride !== undefined) {
         // A user override owns the complete primary section. Runtime clauses stay
         // composer-owned so an override cannot suppress temporal guidance, the
         // warning against overly compressed prose, or the language directive.
-        return `${primaryOverride}${temporalOverrideGuidance}${cavemanWarning}${languageGuidance}`;
+        return `${primaryOverride}${temporalOverrideGuidance}${cavemanWarning}${todoListGuidance}${languageGuidance}`;
     }
 
     if (!ctxReduceCallable) {
         if (preset === "light") {
-            return `## Magic Context\n\n${LONG_TERM_PARTNER_FRAME}\n${PARTNER_FRAME_CLOSER_NO_REDUCE_LIGHT}\n\n${BASE_INTRO_NO_REDUCE_LIGHT(memoryEnabled, dreamerEnabled, temporalAwarenessEnabled)}${cavemanWarning}${languageGuidance}`;
+            return `## Magic Context\n\n${LONG_TERM_PARTNER_FRAME}\n${PARTNER_FRAME_CLOSER_NO_REDUCE_LIGHT}\n\n${BASE_INTRO_NO_REDUCE_LIGHT(memoryEnabled, dreamerEnabled, temporalAwarenessEnabled)}${cavemanWarning}${todoListGuidance}${languageGuidance}`;
         }
-        return `## Magic Context\n\n${LONG_TERM_PARTNER_FRAME}\n${PARTNER_FRAME_CLOSER_NO_REDUCE}\n\n${BASE_INTRO_NO_REDUCE(memoryEnabled, dreamerEnabled, temporalAwarenessEnabled)}${cavemanWarning}${languageGuidance}`;
+        return `## Magic Context\n\n${LONG_TERM_PARTNER_FRAME}\n${PARTNER_FRAME_CLOSER_NO_REDUCE}\n\n${BASE_INTRO_NO_REDUCE(memoryEnabled, dreamerEnabled, temporalAwarenessEnabled)}${cavemanWarning}${todoListGuidance}${languageGuidance}`;
     }
     if (preset === "light") {
-        return `## Magic Context\n\n${LONG_TERM_PARTNER_FRAME}\n${PARTNER_FRAME_CLOSER_REDUCE_LIGHT}\n\n${BASE_INTRO_LIGHT(memoryEnabled, dreamerEnabled, temporalAwarenessEnabled)}${cavemanWarning}${languageGuidance}`;
+        return `## Magic Context\n\n${LONG_TERM_PARTNER_FRAME}\n${PARTNER_FRAME_CLOSER_REDUCE_LIGHT}\n\n${BASE_INTRO_LIGHT(memoryEnabled, dreamerEnabled, temporalAwarenessEnabled)}${cavemanWarning}${todoListGuidance}${languageGuidance}`;
     }
-    return `## Magic Context\n\n${LONG_TERM_PARTNER_FRAME}\n${PARTNER_FRAME_CLOSER_REDUCE}\n\n${BASE_INTRO(memoryEnabled, dreamerEnabled, temporalAwarenessEnabled)}${cavemanWarning}${languageGuidance}`;
+    return `## Magic Context\n\n${LONG_TERM_PARTNER_FRAME}\n${PARTNER_FRAME_CLOSER_REDUCE}\n\n${BASE_INTRO(memoryEnabled, dreamerEnabled, temporalAwarenessEnabled)}${cavemanWarning}${todoListGuidance}${languageGuidance}`;
 }
