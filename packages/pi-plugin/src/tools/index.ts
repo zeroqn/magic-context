@@ -189,14 +189,24 @@ export function registerMagicContextTools(
 		pi.registerTool(ctxExpand);
 	}
 
-	if (opts.todowriteEnabled === true) {
+	// Resolved once, so the definition that is registered and the one the returned map carries are the
+	// same object. The map used to hold only the five `ctx_*` tools, because it was introduced for the
+	// child's proxies (v2 ticket 02) while a child's `todowrite` arrived through a separate capability —
+	// which quietly became a bug the moment the tool bridge asked this map what may be published
+	// (`.scratch/one-tool-surface/` ticket 05): a name absent from it can never reach a cell's catalogue,
+	// whatever the publication policy says.
+	const todowrite =
+		opts.todowriteEnabled === true
+			? (opts.todowriteDefinition ?? createTodowriteTool())
+			: undefined;
+	if (todowrite) {
 		// `todowrite` parity with OpenCode. Pi-coding-agent has no built-in
 		// task list tool, so without this the synthetic-todowrite injector
 		// would never have anything to surface. The tool just captures the
 		// `todos` arg and echoes a pretty-printed JSON ack; `message_end`
 		// in index.ts snapshots `params.todos` into `session_meta.last_todo_state`
 		// for downstream synthesis. See `tools/todowrite.ts` header for rationale.
-		pi.registerTool(opts.todowriteDefinition ?? createTodowriteTool());
+		pi.registerTool(todowrite);
 		if (opts.todowriteCommandEnabled !== false) {
 			registerTodosCommand(pi);
 		}
@@ -216,14 +226,18 @@ export function registerMagicContextTools(
 		pi.registerTool(ctxReduce);
 	}
 
-	// v2 ticket 02: the registry needs the definitions, not only the registrations, so a
-	// bound child can be served ctx_search, ctx_reduce and ctx_expand as proxies. Returning
-	// them changes nothing for callers that ignore the result.
-	return new Map<string, ToolDefinition>([
-		[ctxSearch.name, ctxSearch],
-		[ctxMemory.name, ctxMemory],
-		[ctxNote.name, ctxNote],
-		[ctxExpand.name, ctxExpand],
-		[ctxReduce.name, ctxReduce],
-	]);
+	// Every definition this function knows, registered or not: the registry needs them (v2 ticket 02, so
+	// a bound child can be served proxies) and the tool bridge's policy asks this map what a cell may call
+	// (`.scratch/one-tool-surface/`). A registered tool missing from here is a tool no cell can ever reach,
+	// which is why `todowrite` is in it and why the test beside this asserts the correspondence both ways.
+	return new Map<string, ToolDefinition>(
+		[
+			[ctxSearch.name, ctxSearch],
+			[ctxMemory.name, ctxMemory],
+			[ctxNote.name, ctxNote],
+			[ctxExpand.name, ctxExpand],
+			[ctxReduce.name, ctxReduce],
+			...(todowrite ? [[todowrite.name, todowrite] as [string, ToolDefinition]] : []),
+		],
+	);
 }

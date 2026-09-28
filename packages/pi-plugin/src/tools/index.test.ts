@@ -101,6 +101,48 @@ describe("registerMagicContextTools", () => {
 		}
 	});
 
+	it("carries every tool it registered, so the bridge's policy can see them all", () => {
+		// The bug the live acceptance run caught (`.scratch/one-tool-surface/` ticket 05): this map was
+		// the five `ctx_*` tools, so the bridge's `publishableNames` — which iterates its keys — could never
+		// name `todowrite`, whatever `BRIDGE_PUBLISHABLE_TOOL_NAMES` said. Both directions are asserted,
+		// because a definition in the map that is *not* registered would advertise a tool the session lacks.
+		const db = createTestDb();
+		try {
+			const registered: string[] = [];
+			const pi = {
+				registerTool: (tool: { name: string }) => registered.push(tool.name),
+				registerCommand: () => undefined,
+			} as never;
+			const definitions = registerMagicContextTools(pi, {
+				db,
+				todowriteEnabled: true,
+			});
+			expect([...definitions.keys()].sort()).toEqual([...registered].sort());
+			expect([...definitions.keys()]).toContain("todowrite");
+		} finally {
+			closeQuietly(db);
+		}
+	});
+
+	it("leaves todowrite out of the map when the tool is disabled, and out of Pi's registry too", () => {
+		const db = createTestDb();
+		try {
+			const registered: string[] = [];
+			const pi = {
+				registerTool: (tool: { name: string }) => registered.push(tool.name),
+				registerCommand: () => undefined,
+			} as never;
+			const definitions = registerMagicContextTools(pi, {
+				db,
+				todowriteEnabled: false,
+			});
+			expect([...definitions.keys()]).not.toContain("todowrite");
+			expect(registered).not.toContain("todowrite");
+		} finally {
+			closeQuietly(db);
+		}
+	});
+
 	it("advertises only real ctx_* fields and allows additional properties", () => {
 		const db = createTestDb();
 		try {
