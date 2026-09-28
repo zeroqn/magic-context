@@ -22,9 +22,13 @@
  *   - **Keyed, and replacing** (ticket 04). Pi's jiti loader re-imports an extension entry per session
  *     while `globalThis` survives, so an appending publish would leave one live publication per
  *     import.
- *   - **`todowrite` is not publishable** (ticket 09). Its effect is produced by pi's dispatch — the
- *     `tool_execution_start` / `message_end` capture into `session_meta.last_todo_state` — and not by
- *     its `execute`, so a cell-routed call would silently persist nothing. It stays a pi tool.
+ *   - **`todowrite` is publishable** (`.scratch/one-tool-surface/` tickets 02 and 05, superseding ticket
+ *     09 *by construction* rather than by exception). Ticket 09's rule stands — a tool whose effect is
+ *     pi's dispatch rather than its `execute` must not be published — so the effect moved: the bridge's
+ *     executor runs the same observers pi's dispatch runs for this name (`observePiToolCallStart`, the
+ *     capture and the `todos_complete` trigger), and the wording that used to come with the tool now comes
+ *     from this package's own prompt when pi's guidelines are gone. The rule was not bent; the tool
+ *     changed which side of it it is on.
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
@@ -42,8 +46,10 @@ export const BRIDGE_OWNER = "magic-context";
  *
  * Membership is a statement about the *tool*, not about a session: every name here resolves its own
  * session from the `ctx` it is handed, so it works the same wherever it is called from. A tool whose
- * effect pi's dispatch produces instead is deliberately absent — publishing it would give the model a
- * call that appears to succeed and does nothing (wayfinder ticket 09).
+ * effect pi's dispatch produces **and whose executor does not reproduce it** stays absent — publishing it
+ * would give the model a call that appears to succeed and does nothing (wayfinder ticket 09). `todowrite`
+ * is the tool that crossed that line the honest way: its effect moved into `execute` (ticket 02), so it is
+ * a member like any other.
  */
 export const BRIDGE_PUBLISHABLE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"ctx_search",
@@ -51,6 +57,7 @@ export const BRIDGE_PUBLISHABLE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"ctx_note",
 	"ctx_expand",
 	"ctx_reduce",
+	"todowrite",
 ]);
 
 /**
