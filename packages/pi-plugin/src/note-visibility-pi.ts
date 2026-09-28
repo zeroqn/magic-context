@@ -8,6 +8,10 @@
  * Pi shapes we care about:
  *   - Assistant message with content array containing
  *     `{ type: "toolCall", name: "ctx_note", arguments: { action: "read" } }`
+ *   - A tool **result** whose cell reached `ctx_note(action="read")` through the tool bridge. A
+ *     cell-routed read leaves no such `toolCall` block — the block is code mode's `python` — so the
+ *     call-by-call fact arrives on the result's `details` instead (`cell-calls-pi.ts`), and that result
+ *     is what carries the agent's memory of having read.
  *
  * Pi's tool result message lives separately (`role: "toolResult"`), but
  * for visibility purposes the toolCall part on the assistant is what
@@ -21,6 +25,8 @@
  * their `arguments.action` field (replaced by an empty/sentinel
  * payload), so the action check naturally filters them out.
  */
+
+import { cellToolCalls } from "./cell-calls-pi";
 
 const NOTE_TOOL_NAME = "ctx_note";
 const READ_ACTION = "read";
@@ -46,6 +52,13 @@ export function hasVisibleNoteReadCallPi(messages: unknown[]): boolean {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const raw = messages[i];
 		if (!raw || typeof raw !== "object") continue;
+		// A cell-routed read is visible through the result it happened in, not through a block named
+		// `ctx_note` — see the header. Checked before the role filter, because its carrier is a
+		// `toolResult` message and not an assistant one.
+		for (const call of cellToolCalls(raw)) {
+			if (call.name !== NOTE_TOOL_NAME) continue;
+			if (call.params.action === READ_ACTION) return true;
+		}
 		const msg = raw as PiAssistantMessage;
 		if (msg.role !== "assistant") continue;
 		if (!Array.isArray(msg.content)) continue;
