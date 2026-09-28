@@ -45,6 +45,12 @@ export interface BuildMagicContextBlockOptions {
 	includeGuidance?: boolean;
 	protectedTags?: number;
 	ctxReduceCallable?: boolean;
+	/**
+	 * Whether the todo list is reachable as a cell tool rather than an active pi tool. The pi-plugin
+	 * decides this from pi's own active set (see `isTodoListDisciplineNeeded`), because the tool
+	 * bridge's surface rule is what removes it — and pi's own guidelines for it go with it.
+	 */
+	todoListCallable?: boolean;
 	dreamerEnabled?: boolean;
 	smartNotesEnabled?: boolean;
 	temporalAwarenessEnabled?: boolean;
@@ -87,6 +93,7 @@ export function buildMagicContextBlock(
 		opts.promptSurfacePreset,
 		opts.primaryGuidanceOverride,
 		opts.smartNotesEnabled,
+		opts.todoListCallable ?? false,
 	);
 }
 
