@@ -150,11 +150,14 @@ describe("bridgeToolEntries", () => {
 			toolsMap(calls, ["ctx_search", "ctx_reduce", "todowrite"]),
 			["ctx_search", "ctx_reduce", "todowrite", "ctx_absent"],
 		);
-		// `todowrite` is not publishable — its effect is pi's dispatch, not its `execute`
-		// (ticket 09) — and an unknown name has no definition to describe.
+		// `todowrite` became publishable when its effect moved into the executor
+		// (`.scratch/one-tool-surface/` ticket 05, superseding ticket 09 by construction); an unknown name
+		// has no definition to describe. A tool whose executor does *not* reproduce its dispatch effect is
+		// still dropped by `isBridgePublishable` — the mechanism is pinned in `tool-bridge`'s own tests.
 		expect(entries.map((entry) => entry.name)).toEqual([
 			"ctx_search",
 			"ctx_reduce",
+			"todowrite",
 		]);
 		expect(entries[0].description).toBe("ctx_search description");
 		expect(entries[0].snippet).toBe("ctx_search snippet");
@@ -176,7 +179,6 @@ describe("an instance's publication", () => {
 			registry: registryStub(),
 			tools: definitions,
 			bridge: {
-				// The policy names `todowrite` too: the publication must drop it anyway.
 				publishableNames: () => ["ctx_search", "ctx_reduce", "todowrite"],
 				execute: async (name, params, ctx) => {
 					const definition = definitions.get(name);
@@ -193,6 +195,7 @@ describe("an instance's publication", () => {
 			expect(publication?.catalogue(ctx).map((entry) => entry.name)).toEqual([
 				"ctx_search",
 				"ctx_reduce",
+				"todowrite",
 			]);
 
 			// Permitted: the same set, by construction.
@@ -203,10 +206,17 @@ describe("an instance's publication", () => {
 			);
 			expect(textOf(allowed)).toBe("ctx_search says ok");
 
+			// Published like the rest: the same route, the same policy.
+			const todo = await publication?.execute("todowrite", { todos: [] }, ctx);
+			expect(textOf(todo)).toBe("todowrite says ok");
+
 			// Refused: a name the catalogue never advertised.
-			const refused = await publication?.execute("todowrite", {}, ctx);
+			const refused = await publication?.execute("ctx_absent", {}, ctx);
 			expect(textOf(refused)).toContain("not available");
-			expect(calls).toEqual(['ctx_search:{"query":"wal"}']);
+			expect(calls).toEqual([
+				'ctx_search:{"query":"wal"}',
+				"todowrite:{\"todos\":[]}",
+			]);
 		} finally {
 			unpublish();
 		}
