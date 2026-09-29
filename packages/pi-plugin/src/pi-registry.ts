@@ -346,3 +346,17 @@ export function registerPiRegistry(options: {
 export function __piRegistrySizeForTests(): number {
 	return registrations.size;
 }
+
+/**
+ * Test seam: empty the registry, and take the facade down with it.
+ *
+ * The registry is a **process-global**, so a suite that runs many files in one bun process
+ * carries every earlier file's registrations into the next one — and `resolve`'s "the only
+ * instance can serve whatever it is handed" fallback then correctly refuses to answer for an
+ * unbound session. A test that needs the empty process a fresh run has asks for one here, the
+ * same way `dreamer/pi-session-api.ts` exposes `clearCachedModule` for its own memo.
+ */
+export function __resetPiRegistryForTests(): void {
+	registrations.clear();
+	delete (globalThis as Record<symbol, unknown>)[REGISTRY_KEY];
+}
