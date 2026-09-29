@@ -39,6 +39,45 @@ function tagMessages(
 	return { tagger, transcript, targets: tagged.targets };
 }
 
+/** A cell's call: code mode's `python` call, whose result's trace says what the cell reached. */
+function cellCallExchange(
+	callId: string,
+	timestamp: number,
+	name: string,
+	params: Record<string, unknown>,
+	hostName: string,
+): unknown[] {
+	return [
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: callId,
+					name: hostName,
+					arguments: { code: `await tool("${name}")` },
+				},
+			],
+			timestamp,
+		},
+		{
+			...toolResultMessage(callId, "the cell ran", timestamp + 1),
+			toolName: hostName,
+			details: { cellCalls: [{ host: "tool", args: [name, params] }] },
+		},
+	];
+}
+
+function cellReduceExchange(callId: string, timestamp: number): unknown[] {
+	return cellCallExchange(
+		callId,
+		timestamp,
+		"ctx_reduce",
+		{ drop: "1-3" },
+		"python",
+	);
+}
+
 function ctxReduceExchange(callId: string, timestamp: number): unknown[] {
 	return [
 		{
@@ -401,6 +440,93 @@ describe("applyPiHeuristicCleanup", () => {
 			// user toolResult reuses #3, user "next request" (#4), assistant
 			// "newer answer" (#5), user "latest request" (#6). reduce-1 = #3.
 			expect(textOf(replayTranscript.getOutputMessages()[2] as never)).toBe("");
+		} finally {
+			closeQuietly(db);
+		}
+	});
+
+	it("files a cell's python pair under ctx_reduce, and drops it when it is stale", () => {
+		// `.scratch/one-tool-surface/` ticket 11. A cell's reduce leaves no `ctx_reduce` block: pi records
+		// code mode's `python` call, and the trace on that call's result says what the cell reached. The tag
+		// row is the *filing* name (so the reduce-specific housekeeping sees it) while the transcript keeps
+		// saying `python` (asserted in `transcript-pi.test.ts`).
+		const db = createTestDb();
+		try {
+			const sessionId = "ses-heuristic-cell-reduce";
+			const messages = [
+				userMessage("older request", 1),
+				...cellReduceExchange("cell-1", 2),
+				userMessage("next request", 4),
+				assistantMessage("newer answer", 5),
+				userMessage("latest request", 6),
+				...ctxReduceExchange("reduce-2", 7),
+				...ctxReduceExchange("reduce-3", 9),
+				...ctxReduceExchange("reduce-4", 11),
+			];
+			const { targets } = tagMessages(sessionId, db, messages);
+
+			expect(
+				getTagsBySession(db, sessionId)
+					.filter((tag) => tag.messageId === "cell-1")
+					.map((tag) => tag.toolName),
+			).toEqual(["ctx_reduce"]);
+
+			const result = applyPiHeuristicCleanup(sessionId, db, targets, messages, {
+				protectedTags: 2,
+				staleReduceStripEnabled: true,
+			});
+
+			// Dropped as stale exactly like a dispatched one, under the same composite identity: the owner
+			// is the assistant message holding the python call, the call id is that call's.
+			expect(result.droppedStaleReduceCalls).toBe(1);
+			expect(
+				getTagsBySession(db, sessionId)
+					.filter((tag) => tag.messageId === "cell-1")
+					.map((tag) => [tag.status, tag.dropMode]),
+			).toEqual([["dropped", "full"]]);
+		} finally {
+			closeQuietly(db);
+		}
+	});
+
+	it("leaves a cell's non-reduce python result alone", () => {
+		const db = createTestDb();
+		try {
+			const sessionId = "ses-heuristic-cell-search";
+			const messages = [
+				userMessage("older request", 1),
+				...cellCallExchange(
+					"cell-1",
+					2,
+					"ctx_search",
+					{ query: "wal" },
+					"python",
+				),
+				userMessage("next request", 4),
+				assistantMessage("newer answer", 5),
+				userMessage("latest request", 6),
+				...ctxReduceExchange("reduce-2", 7),
+				...ctxReduceExchange("reduce-3", 9),
+				...ctxReduceExchange("reduce-4", 11),
+			];
+			const { targets } = tagMessages(sessionId, db, messages);
+
+			expect(
+				getTagsBySession(db, sessionId)
+					.filter((tag) => tag.messageId === "cell-1")
+					.map((tag) => tag.toolName),
+			).toEqual(["python"]);
+
+			applyPiHeuristicCleanup(sessionId, db, targets, messages, {
+				protectedTags: 2,
+				staleReduceStripEnabled: true,
+			});
+
+			expect(
+				getTagsBySession(db, sessionId)
+					.filter((tag) => tag.messageId === "cell-1")
+					.map((tag) => tag.status),
+			).toEqual(["active"]);
 		} finally {
 			closeQuietly(db);
 		}

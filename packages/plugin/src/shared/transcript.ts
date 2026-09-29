@@ -79,6 +79,19 @@ export interface TranscriptPart {
     readonly kind: TranscriptPartKind;
 
     /**
+     * The name this part's **tag** is filed under, when it differs from the transcript's own word for the
+     * part.
+     *
+     * A harness sets it for a part that can *contain* another tool's work: pi's code-mode adapter marks a
+     * `python` result whose cell ran a `ctx_reduce`, so Magic Context's reduce-specific housekeeping — the
+     * stale-reduce drop, tail hygiene's exemplars, the reclaim protection — sees the reduction, while the
+     * part itself keeps saying `python` for everything that reads the transcript's word
+     * (`zeroqn/pi` `.scratch/one-tool-surface/` ticket 11). Read it *before* the part's own name when a tag
+     * is being filed, and never in place of it elsewhere.
+     */
+    readonly tagToolName?: string;
+
+    /**
      * Best-effort identifier for cross-pass tracking. May be:
      * - OpenCode part ID (e.g. "prt_..."), stable across passes.
      * - Pi tool-call ID for tool_use/tool_result parts.

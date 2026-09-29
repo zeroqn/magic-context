@@ -232,6 +232,22 @@ export function tagTranscript(
     // assignToolTag. OpenCode/Pi callId counters can repeat across turns, so
     // a bare callId key can merge distinct invocations and replay drops/status
     // changes against the wrong tool pair.
+    // A part may name its tag explicitly (`TranscriptPart.tagToolName`). The pi adapter sets it on the
+    // *result* half when the cell that produced it ran a `ctx_reduce`, and a pair's name is decided by
+    // whichever half is walked first — the assistant's `python` tool_use — so the names are collected up
+    // front rather than in walk order (`zeroqn/pi` `.scratch/one-tool-surface/` ticket 11).
+    const filingToolNames = new Map<string, string>();
+    for (const message of transcript.messages) {
+        for (const part of message.parts) {
+            const explicit = part.tagToolName;
+            if (typeof explicit === "string" && explicit.length > 0 && part.id) {
+                filingToolNames.set(part.id, explicit);
+            }
+        }
+    }
+    const filingToolNameFor = (part: TranscriptPart): string | undefined =>
+        part.id === undefined ? undefined : filingToolNames.get(part.id);
+
     const toolAggregates = new Map<string, ToolAggregate & { tagId: number }>();
     const openToolAggregateKeysByCallId = new Map<string, string[]>();
     let activeToolResultRun: { callId: string; aggregateKey: string } | undefined;
@@ -330,6 +346,7 @@ export function tagTranscript(
                         targets,
                         skipPrefixInjection,
                         reuseIdentity,
+                        filingToolName: filingToolNameFor(part),
                         timing,
                     });
                     continue;
@@ -518,7 +535,7 @@ export function tagTranscript(
                         outputByteSize,
                         db,
                         0,
-                        accounting.toolName,
+                        filingToolNameFor(part) ?? accounting.toolName,
                         accounting.inputByteSize,
                         () => ({
                             tokenCount: outputTokenCount,
@@ -538,7 +555,7 @@ export function tagTranscript(
                         occurrences: [{ message, part, kind: part.kind }],
                         maxByteSize: persistedAccounting?.byteSize ?? outputByteSize,
                         maxTokenCount: persistedAccounting?.tokenCount ?? outputTokenCount,
-                        toolName: accounting.toolName,
+                        toolName: filingToolNameFor(part) ?? accounting.toolName,
                         inputByteSize:
                             persistedAccounting?.inputByteSize ??
                             (part.kind === "tool_use" ? accounting.inputByteSize : 0),
@@ -988,6 +1005,8 @@ interface TagToolPartArgs {
     targets: Map<number, TagTarget>;
     skipPrefixInjection: boolean;
     reuseIdentity: boolean;
+    /** The part's explicit filing name, when it has one — see `TranscriptPart.tagToolName`. */
+    filingToolName?: string | undefined;
     timing?: TagTranscriptTiming;
 }
 
@@ -1029,7 +1048,7 @@ function tagToolPart(args: TagToolPartArgs): void {
         toolByteSize,
         args.db,
         0,
-        meta.toolName ?? null,
+        args.filingToolName ?? meta.toolName ?? null,
         meta.inputByteSize,
         () => {
             const tokenStart = args.timing ? performance.now() : 0;

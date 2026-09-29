@@ -77,6 +77,7 @@ import type {
 	TranscriptPart,
 	TranscriptPartKind,
 } from "@magic-context/core/shared/transcript";
+import { cellReduceFilingName } from "./cell-calls-pi";
 import {
 	canRemoveNativeToolCall,
 	removeNativeToolCall,
@@ -886,9 +887,17 @@ function createPiToolResultPart(
 	// so tagTranscript aggregates text + image blocks under msg.toolCallId
 	// and a single drop replaces the whole result.
 	const kind: TranscriptPartKind = "tool_result";
+	// The filing name, when the cell that produced this result ran a `ctx_reduce`: a cell leaves no
+	// `ctx_reduce` block, so the tag would otherwise be filed under `python` and Magic Context's
+	// reduce-specific housekeeping would not see the reduction at all
+	// (`.scratch/one-tool-surface/` ticket 11). The part's own transcript word stays `python` —
+	// `createPiToolResultPart` never renames the pi message, so the formatter, the historian and the
+	// stale-reduce drop keep reading what actually happened.
+	const tagToolName = cellReduceFilingName(msg);
 	return {
 		kind,
 		id: msg.toolCallId,
+		...(tagToolName ? { tagToolName } : {}),
 		remove(): boolean {
 			return markToolRemoval(working, messageIndex, partIndex);
 		},

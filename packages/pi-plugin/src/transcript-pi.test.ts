@@ -42,6 +42,48 @@ class LegacyAggregateToolTokenCache extends CountingToolTokenCache {
 	}
 }
 
+describe("a cell's result names its tag, not its transcript", () => {
+	function cellResult(name: string) {
+		return {
+			role: "toolResult",
+			toolCallId: "tc-1",
+			toolName: "python",
+			content: [{ type: "text", text: "the cell ran" }],
+			isError: false,
+			timestamp: 3,
+			details: { cellCalls: [{ host: "tool", args: [name, {}] }] },
+		};
+	}
+
+	function resultPart(messages: unknown[]) {
+		const transcript = createPiTranscript(
+			messages as never[],
+			"ses-cell-filing",
+		);
+		const parts = transcript.messages.flatMap((message) => message.parts);
+		expect(transcript.getOutputMessages()).toEqual(messages as never[]);
+		return parts.find((part) => part.kind === "tool_result");
+	}
+
+	it("files a python result whose cell ran ctx_reduce under ctx_reduce", () => {
+		const part = resultPart([
+			userMessage("kick off", 1),
+			assistantToolCall("tc-1", "python", {}, 2),
+			cellResult("ctx_reduce"),
+		]);
+		expect(part?.tagToolName).toBe("ctx_reduce");
+	});
+
+	it("names nothing for a cell that ran something else", () => {
+		const part = resultPart([
+			userMessage("kick off", 1),
+			assistantToolCall("tc-1", "python", {}, 2),
+			cellResult("ctx_search"),
+		]);
+		expect(part?.tagToolName).toBeUndefined();
+	});
+});
+
 describe("createPiTranscript", () => {
 	it("scoped gate Pi finalization preserves unrelated reasoning-only assistant", () => {
 		const db = createTestDb();

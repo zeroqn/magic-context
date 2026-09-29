@@ -61,6 +61,7 @@ import { stripSystemInjection } from "@magic-context/core/hooks/magic-context/sy
 import type { TagTarget } from "@magic-context/core/hooks/magic-context/tag-messages";
 import { stripTagPrefix } from "@magic-context/core/hooks/magic-context/tag-part-guards";
 import { sessionLog } from "@magic-context/core/shared/logger";
+import { cellReduceFilingName } from "./cell-calls-pi";
 
 /**
  * Same DEDUP_SAFE_TOOLS list OpenCode uses. Read-only tools whose
@@ -201,6 +202,33 @@ function buildPiToolFingerprints(
 }
 
 /**
+ * The tool-call ids whose **result** carried a cell-routed `ctx_reduce`.
+ *
+ * A cell's reduce is not a `ctx_reduce` block: pi records code mode's `python` call, and the trace on that
+ * call's result says what the cell reached (`cell-calls-pi`). Reading it here is what makes a cell's
+ * reduction drop-eligible as stale at all — before this, `collectStaleReduceCallIds` found only dispatched
+ * reductions, so an old cell-reduced result was never dropped
+ * (`zeroqn/pi` `.scratch/one-tool-surface/` ticket 11).
+ *
+ * Keyed by the call id, because that is the half of the composite identity the tag row carries: the tag's
+ * `message_id` for a cell reduce is the `python` call's id, and its `tool_owner_message_id` is the
+ * assistant message holding that call — the same owner the scan resolves from the message it walks.
+ */
+function collectCellReduceCallIds(messages: readonly unknown[]): Set<string> {
+	const ids = new Set<string>();
+	for (const raw of messages) {
+		if (!raw || typeof raw !== "object") continue;
+		const msg = raw as { role?: unknown; toolCallId?: unknown };
+		if (msg.role !== "toolResult") continue;
+		if (typeof msg.toolCallId !== "string" || msg.toolCallId.length === 0)
+			continue;
+		if (cellReduceFilingName(msg) === undefined) continue;
+		ids.add(msg.toolCallId);
+	}
+	return ids;
+}
+
+/**
  * Identify stale `ctx_reduce` tool calls by COMPOSITE (owner, callId) identity.
  *
  * A bare-callId match is unsafe: Pi/OpenCode can reuse a tool callId across
@@ -228,6 +256,7 @@ function collectStaleReduceCallIds(
 		string,
 		{ composite: string; callId: string; maxTag: number; messageIndex: number }
 	>();
+	const cellReduceCallIds = collectCellReduceCallIds(messages);
 	for (let i = 0; i < messages.length; i++) {
 		const raw = messages[i];
 		if (!raw || typeof raw !== "object") continue;
@@ -246,8 +275,9 @@ function collectStaleReduceCallIds(
 			if (!part || typeof part !== "object") continue;
 			const p = part as { type?: unknown; name?: unknown; id?: unknown };
 			if (p.type !== "toolCall") continue;
-			if (p.name !== "ctx_reduce") continue;
 			if (typeof p.id !== "string" || p.id.length === 0) continue;
+			// Either a dispatched reduce, or the `python` call of a cell that ran one.
+			if (p.name !== "ctx_reduce" && !cellReduceCallIds.has(p.id)) continue;
 			const composite = `${stableId}\x00${p.id}`;
 			const maxTag = ctxReduceTagNumbers.get(composite) ?? ownerMaxTag;
 			if (maxTag === 0) continue;
