@@ -6,12 +6,23 @@
  * header — `SessionManager.forkFrom` also writes `parentSession`, so a `/fork` must not be
  * mistaken for a child.
  */
-import { describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it } from "bun:test";
 import {
 	__piRegistrySizeForTests,
+	__resetPiRegistryForTests,
 	isBoundChild,
 	registerPiRegistry,
 } from "./pi-registry";
+
+/**
+ * The registry is a process-global, so a whole-suite run in one bun process carries every
+ * earlier file's registrations in here — which is enough to break both assertions below
+ * (the size, and the "only instance in the process" fallback). Start from the empty process
+ * a fresh run has.
+ */
+beforeEach(() => {
+	__resetPiRegistryForTests();
+});
 
 const KEY = Symbol.for("@cortexkit/magic-context:pi-registry");
 
