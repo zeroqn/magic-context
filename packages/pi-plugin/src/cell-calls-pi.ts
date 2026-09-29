@@ -52,3 +52,22 @@ export function cellToolCalls(message: unknown): CellToolCall[] {
 	}
 	return calls;
 }
+
+/**
+ * The name a cell's result is **filed** under when the cell ran a reduce, or `undefined` when it did not.
+ *
+ * The live tagger and the read-session projection both ask this, so a cell's reduction is one thing to
+ * Magic Context wherever it is observed: `transcript-pi` (the transform's own tagging pass, which writes
+ * the `tags` rows) and `read-session-pi` (the projection the historian and the readers see). Before this
+ * existed the rule lived only in the projection — which is why a cell reduce's tag row said `python` in
+ * the database while the readers saw `ctx_reduce` (`zeroqn/pi`'s `.scratch/one-tool-surface/` ticket 11).
+ *
+ * A *filing* name only: the part's own `tool` stays what the transcript says, because the historian, the
+ * formatter and the stale-reduce drop read that one and must not be told a cell's printed output was a
+ * bare reduce call.
+ */
+export function cellReduceFilingName(message: unknown): string | undefined {
+	return cellToolCalls(message).some((call) => call.name === "ctx_reduce")
+		? "ctx_reduce"
+		: undefined;
+}
