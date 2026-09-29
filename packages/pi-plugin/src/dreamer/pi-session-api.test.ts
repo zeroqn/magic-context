@@ -105,6 +105,13 @@ describe("loadDefaultPiSessionApi", () => {
 	beforeEach(() => {
 		clearCachedModule();
 	});
+	// And after each one too: the cache is a process-global, so whatever module this file
+	// resolved last would otherwise answer for every later test file in the same bun process —
+	// including this file's generated fixture modules, which have no `getAgentDir`. Needs the
+	// whole suite to be green, not just this file.
+	afterEach(() => {
+		clearCachedModule();
+	});
 
 	afterEach(() => {
 		clearCachedModule();
