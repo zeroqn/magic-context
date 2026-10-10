@@ -68,6 +68,7 @@ import {
 	getSessionsWithPendingPiMarker,
 	updateSessionMeta,
 } from "@magic-context/core/features/magic-context/storage";
+import type { SessionMeta } from "@magic-context/core/features/magic-context/types";
 import {
 	applySqliteTuningPragmas,
 	closeDatabase,
@@ -589,9 +590,23 @@ export function observePiToolCallStart(args: {
 			const todos = (
 				args.args as { todos?: Array<{ status?: string }> } | undefined
 			)?.todos;
-			const sessionMeta = Array.isArray(todos)
-				? getOrCreateSessionMeta(args.db, args.sessionId)
-				: null;
+			// Read defensively, because the capture below has an in-memory half the user
+			// sees: `setTodoSnapshot` and the overlay redraw must happen whether or not
+			// storage answers. A malformed database made this one read throw, and the catch
+			// at the bottom of this function swallowed the whole capture — the call still
+			// returned the stored todos, so it looked like it had worked while the todo list
+			// stayed frozen. Unreadable meta means "do not persist", and nothing else.
+			let sessionMeta: SessionMeta | null = null;
+			if (Array.isArray(todos)) {
+				try {
+					sessionMeta = getOrCreateSessionMeta(args.db, args.sessionId);
+				} catch (err) {
+					warn(
+						"observePiToolCallStart(todowrite): session meta unavailable:",
+						err,
+					);
+				}
+			}
 
 			// Synthetic-todowrite snapshot capture (Pi parity with OpenCode
 			// hook-handlers.ts:386-401). Persist normalized state on EVERY todowrite call so the
@@ -2257,8 +2272,17 @@ async function startPiMagicContextRuntime(
 			reportPiModelChains(ctx, current);
 		}
 	});
-	const readLastTodoState = (sessionId: string) =>
-		getOrCreateSessionMeta(db, sessionId).lastTodoState;
+	// The overlay seeds itself from this on `session_start`, so a read that throws
+	// there costs the list its restored contents for the whole session. Same
+	// reasoning as the capture sites: storage answers, or the surface comes up empty.
+	const readLastTodoState = (sessionId: string): string | null => {
+		try {
+			return getOrCreateSessionMeta(db, sessionId).lastTodoState ?? null;
+		} catch (err) {
+			warn("session_start: last todo state unavailable:", err);
+			return null;
+		}
+	};
 	const todoOverlay = registerConfiguredTodoLifecycle(pi, {
 		configured: todowriteEnabled,
 		overlay: bootProjectDeps.config.todowrite.overlay,
@@ -3306,9 +3330,19 @@ async function startPiMagicContextRuntime(
 			// Subagents skip — they don't get synthetic todowrite
 			// injection downstream (mirrors OpenCode `fullFeatureMode`
 			// gate).
+			// Same shape as `observePiToolCallStart`: the subagent gate is the only
+			// reason this reads storage, and a read that throws must not decide whether
+			// the snapshot and the overlay are updated at all. Unreadable meta is
+			// treated as "not a subagent"; the persist half then fails on its own.
+			let sessionMetaIsSubagent = false;
 			try {
-				const sessionMetaForTodo = getOrCreateSessionMeta(db, sessionId);
-				if (!sessionMetaForTodo.isSubagent) {
+				sessionMetaIsSubagent =
+					getOrCreateSessionMeta(db, sessionId).isSubagent;
+			} catch (err) {
+				warn("message_end: session meta unavailable for todowrite capture:", err);
+			}
+			try {
+				if (!sessionMetaIsSubagent) {
 					capturePiTodowriteMessageIfCompatible({
 						db,
 						sessionId,
