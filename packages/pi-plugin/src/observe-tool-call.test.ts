@@ -208,6 +208,38 @@ describe("a cell-routed call is observed", () => {
 		}
 	});
 
+	it("storage that throws still updates the snapshot and the overlay", async () => {
+		// The capture has an in-memory half the user sees. A malformed database made the
+		// session-meta read throw, and the observer's outer catch swallowed the whole capture:
+		// the call still returned the stored todos, so it looked like it had worked while the
+		// todo list stayed frozen for the rest of the session.
+		const db = createTestDb();
+		const calls: string[] = [];
+		const overlayUpdates: (string | undefined)[] = [];
+		try {
+			const sessionId = "ses-cell-todo-storage-down";
+			getOrCreateSessionMeta(db, sessionId);
+			closeQuietly(db);
+			// The read really is a throw rather than a silent fallback, or this proves nothing.
+			expect(() => getOrCreateSessionMeta(db, sessionId)).toThrow();
+
+			await called({
+				db,
+				sessionId,
+				name: "todowrite",
+				params: { todos: IN_FLIGHT },
+				calls,
+				overlay: { update: (sid) => overlayUpdates.push(sid) },
+			});
+
+			expect(calls).toHaveLength(1);
+			expect(getTodoSnapshot(sessionId).todos).toHaveLength(2);
+			expect(overlayUpdates).toEqual([sessionId]);
+		} finally {
+			closeQuietly(db);
+		}
+	});
+
 	it("both entry points land the same state for the same payload", async () => {
 		const db = createTestDb();
 		const calls: string[] = [];
