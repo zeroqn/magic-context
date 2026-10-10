@@ -623,6 +623,10 @@ describe("the todo-list wording a published tool needs", () => {
         const present = base(true);
         expect(present).toContain('await tool("todowrite"');
         expect(present).toContain("Pass the COMPLETE updated list every time");
+        // The cadence clause (2026-10-10): a list that only moves at the end shows the user
+        // nothing, so the wording names the moments a call belongs to.
+        expect(present).toContain("call it as each step changes state");
+        expect(present).toContain("shows them nothing");
         // The failure ../tool-bridge ticket 13 fixed: naming a tool that is no longer a pi tool.
         expect(present).not.toContain("Use `todowrite`");
     });
