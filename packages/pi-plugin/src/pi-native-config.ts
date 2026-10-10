@@ -35,8 +35,30 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
+/** Mirrors magic-context's homeDir(): HOME first, then os.homedir(). */
+function homeDir(): string {
+	if (process.platform === "win32") {
+		return process.env.USERPROFILE || process.env.HOME || homedir();
+	}
+	return process.env.HOME || homedir();
+}
+
+/**
+ * The pi-native file, resolved through `homeDir()` rather than `os.homedir()`.
+ *
+ * The two are not the same answer inside a *test* process. Bun reads `$HOME` once, at
+ * process start, and `os.homedir()` keeps returning that snapshot afterwards (measured on
+ * bun 1.4.2: assigning `process.env.HOME` leaves `homedir()` at the value the process
+ * booted with). A test preload can therefore only relocate the paths that resolve through
+ * the live environment — which is what `configHome()` does — so a `PI_NATIVE_PATH` built
+ * from `homedir()` stayed in the developer's real home while the CortexKit target moved
+ * into the throwaway tree. `ensureLink()` then saw "a newer external write" at the target
+ * and adopted it over the real file: on 2026-10-09 a pi-plugin test replaced
+ * `~/.pi/agent/extension-configs/magic-context/magic-context.jsonc` with its own fixture
+ * and moved the real settings aside as `magic-context.jsonc.pre-symlink.1791532417793`.
+ */
 const PI_NATIVE_PATH = join(
-	homedir(),
+	homeDir(),
 	".pi",
 	"agent",
 	"extension-configs",
@@ -44,12 +66,12 @@ const PI_NATIVE_PATH = join(
 	"magic-context.jsonc",
 );
 
-/** Mirrors magic-context's homeDir(): HOME first, then os.homedir(). */
-function homeDir(): string {
-	if (process.platform === "win32") {
-		return process.env.USERPROFILE || process.env.HOME || homedir();
-	}
-	return process.env.HOME || homedir();
+/**
+ * Where the pi-native config is read and written. Exported so a test can assert it lands
+ * inside the home the process was given — the invariant `ensureLink()` is only safe under.
+ */
+export function piNativeConfigPath(): string {
+	return PI_NATIVE_PATH;
 }
 
 /** Mirrors magic-context's configHome(): XDG_CONFIG_HOME only when absolute. */
