@@ -60,3 +60,24 @@ afterAll(() => {
 		);
 	}
 });
+// HOME as well, because a path *derived from it* is a write target — and the
+// XDG redirect above does not cover one. This fork's `pi-native-config.ts`
+// computes `PI_NATIVE_PATH` from `os.homedir()`
+// (`~/.pi/agent/extension-configs/magic-context/magic-context.jsonc`), and
+// `ensurePiNativeConfigLink()`, which the plugin factory calls on load, ADOPTS a
+// newer external write found at the CortexKit path over it, moving the loser to
+// `.pre-symlink[.<Date.now()>]`. With HOME left real the two paths straddle this
+// isolation: the target is inside the throwaway tree and the file it overwrites
+// is the developer's own. A test that writes a regular file at the isolated
+// CortexKit path therefore rewrote a live config — on 2026-10-09 the latch test
+// in `index-in-process-latch.test.ts` replaced
+// `~/.pi/agent/extension-configs/magic-context/magic-context.jsonc` with its own
+// fixture and moved the real settings to `.pre-symlink.1791532417793`, so
+// `todowrite.enabled` became false in a config nobody had edited.
+//
+// Redirecting HOME puts the HOME-derived path inside this same throwaway tree,
+// so no test can reach the real pi-native file however it writes the CortexKit
+// one. The root and e2e bunfigs preload `packages/plugin/test-preload.ts`, which
+// carries the same redirect for runs that discover this package's tests from
+// outside it.
+process.env.HOME = isolatedDataHome;

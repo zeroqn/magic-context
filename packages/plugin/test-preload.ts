@@ -83,3 +83,13 @@ afterAll(() => {
         throw new Error(`Test storage leaked into the package directory:\n${violations.join("\n")}`);
     }
 });
+// HOME too. The XDG redirects cover config *resolution*; they do not cover a
+// path built from `os.homedir()`. The Pi fork's `pi-native-config.ts` derives
+// its pi-native config path that way
+// (`~/.pi/agent/extension-configs/magic-context/magic-context.jsonc`) and moves
+// a newer external write at the CortexKit path over it, so a pi-plugin test that
+// writes that path rewrote a developer's real config (2026-10-09, see
+// packages/pi-plugin/test-preload.ts). The vendored root bunfig and
+// packages/e2e-tests/bunfig.toml preload THIS file, so a run that discovers the
+// pi-plugin tests from above them needs the redirect here as well.
+process.env.HOME = isolatedDataHome;
