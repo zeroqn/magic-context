@@ -14,9 +14,22 @@ import {
 	TODO_PRIORITIES,
 	TODO_STATUSES,
 } from "@magic-context/core/hooks/magic-context/todo-view";
+import { isBoundChild } from "../pi-registry";
+import {
+	decideTodoSettle,
+	forgetTodoSettleState,
+	noteRunStart,
+	readLiveWork,
+	type SettleSurface,
+	TODO_SETTLE_EVENT,
+	type TodoSettleEvent,
+} from "../pi-todo-settle";
 
 export const TODO_TOOL_NAME = "todowrite";
 export const TODOS_COMMAND_NAME = "todos";
+
+/** The entry type the run-boundary nudge is recorded under (see `pi-todo-settle.ts`). */
+export const TODO_REFRESH_CUSTOM_TYPE = "magic-context-todo-refresh";
 
 const WIDGET_KEY = "magic-context-todos";
 const MAX_TODO_CONTENT_ROWS = 12;
@@ -35,6 +48,16 @@ export interface TodoItem {
 
 export interface TodoSnapshot {
 	todos: TodoItem[];
+	/**
+	 * True when this list was **loaded** from storage rather than written in this process.
+	 *
+	 * `session_start` seeds the panel from `session_meta.last_todo_state`, which on a resumed session is
+	 * as old as the last write of the previous life of that session — measured at 6h44m in
+	 * `.scratch/todo-desync/TARBALL-01a1421a.md`, where the panel came back showing "3 in progress" for
+	 * work that had finished hours earlier. The overlay says so in its heading; the first write of the
+	 * session clears it.
+	 */
+	restored?: boolean;
 }
 
 interface TodoCounts {
@@ -146,7 +169,8 @@ export function parseTodoStateJson(
 export function setTodoSnapshot(sessionId: string, todos: unknown): boolean {
 	const parsed = parseTodos(todos);
 	if (parsed === null) return false;
-	snapshotsBySession.set(sessionId, { todos: parsed });
+	// A write, not a load: the list is this session's own from here on (see `restored`).
+	snapshotsBySession.set(sessionId, { todos: parsed, restored: false });
 	return true;
 }
 
@@ -159,14 +183,19 @@ export function seedTodoSnapshotFromStateJson(
 		snapshotsBySession.delete(sessionId);
 		return false;
 	}
-	snapshotsBySession.set(sessionId, { todos: parsed });
+	snapshotsBySession.set(sessionId, { todos: parsed, restored: true });
 	return true;
 }
 
 export function getTodoSnapshot(sessionId: string | undefined): TodoSnapshot {
 	if (!sessionId) return { todos: [] };
 	const snapshot = snapshotsBySession.get(sessionId);
-	return { todos: snapshot ? cloneTodos(snapshot.todos) : [] };
+	return snapshot
+		? {
+				todos: cloneTodos(snapshot.todos),
+				restored: snapshot.restored === true,
+			}
+		: { todos: [] };
 }
 
 export function clearTodoSnapshot(sessionId: string): void {
@@ -307,22 +336,36 @@ export function renderTodowriteCall(
 	return lineComponent((width) => [truncateToWidth(line, width, "…")]);
 }
 
+/** The first text part of a tool result, or `undefined` — what both renderers read. */
+function firstResultText(content: unknown): string | undefined {
+	if (!Array.isArray(content)) return undefined;
+	return content.find(
+		(part): part is { type: "text"; text: string } =>
+			part !== null &&
+			typeof part === "object" &&
+			(part as { type?: unknown }).type === "text" &&
+			typeof (part as { text?: unknown }).text === "string",
+	)?.text;
+}
+
 export function renderTodowriteResult(
-	result: { details?: unknown; content?: unknown },
+	result: { details?: unknown; content?: unknown; isError?: unknown },
 	theme: Theme,
 	context?: ToolRenderContext,
 ): Component {
+	// A rejected payload is not a list: rendering it as "No todos" would show the reader an empty list
+	// where the call in fact changed nothing (see `incompatibleTodo` in `tools/todowrite.ts`).
+	if (result.isError === true) {
+		const text = firstResultText(result.content) ?? "the todo call failed";
+		return lineComponent((width) => [
+			truncateToWidth(theme.fg("error", text), width, "…"),
+		]);
+	}
 	const detailsTodos = (result.details as { todos?: unknown } | undefined)
 		?.todos;
 	let todos = parseTodos(detailsTodos);
 	if ((todos === null || todos.length === 0) && Array.isArray(result.content)) {
-		const text = result.content.find(
-			(part): part is { type: "text"; text: string } =>
-				part !== null &&
-				typeof part === "object" &&
-				(part as { type?: unknown }).type === "text" &&
-				typeof (part as { text?: unknown }).text === "string",
-		)?.text;
+		const text = firstResultText(result.content);
 		if (text) {
 			try {
 				const parsed = parseTodos(JSON.parse(text));
@@ -547,7 +590,12 @@ export class TodoOverlay {
 			? "accent"
 			: "dim";
 		const headingIcon = hasInProgress ? "●" : "○";
-		const heading = `${theme.fg(headingColor, headingIcon)} ${theme.fg(headingColor, "Todos")} ${theme.fg("muted", "—")} ${theme.fg("dim", formatCounts(counts))}`;
+		// A list that was restored rather than written says so: without this, a resumed session
+		// presents a previous life's state under the same heading as live work (see `TodoSnapshot.restored`).
+		const restoredNote = getTodoSnapshot(this.sessionId).restored
+			? ` ${theme.fg("dim", "· restored")}`
+			: "";
+		const heading = `${theme.fg(headingColor, headingIcon)} ${theme.fg(headingColor, "Todos")} ${theme.fg("muted", "—")} ${theme.fg("dim", formatCounts(counts))}${restoredNote}`;
 		const truncate = (line: string) => truncateToWidth(line, width, "…");
 		const lines = [truncate(heading)];
 
@@ -590,14 +638,60 @@ export function registerTodoOverlay(
 		overlay.update(sessionId);
 	});
 
-	pi.on("agent_start", async () => {
+	pi.on("agent_start", async (_event, ctx) => {
+		// "This run" starts here: a write from an earlier run must not excuse the list from being
+		// reconciled at the end of this one (see `decideTodoSettle`).
+		noteRunStart(getSessionId(ctx) ?? "");
 		overlay.hideCompletedTasksFromPreviousTurn();
 	});
+
+	/**
+	 * The run's final boundary, and the one thing the overlay can do about a list whose work ended
+	 * without a last write: ask the owner to reconcile it, in this run, from the model's own side.
+	 *
+	 * pi's contract for the returned entries is worth stating, because getting it wrong silently drops
+	 * another extension's work: a handler's `entries` **replace** what earlier handlers drafted
+	 * (`core/extensions/runner.js` `emitBoundary`), so the event's own array is carried forward here.
+	 * `continue: true` buys exactly one more provider request, and only after the entry is committed —
+	 * pi checks `canContinue` *after* committing, so an appended `custom_message` is what makes the
+	 * continuation legal rather than an invalid-boundary warning.
+	 */
+	(pi as unknown as SettleSurface).on(
+		TODO_SETTLE_EVENT,
+		(event: TodoSettleEvent, ctx: unknown) => {
+			const sessionId = getSessionId(
+				ctx as { sessionManager?: { getSessionId?: () => string | undefined } },
+			);
+			// A bound child has no todo surface (its `todowrite` is stripped and the discipline is not written
+			// for it) and its run is somebody's tool call: an extra request there is cost with no reader.
+			if (!sessionId || isBoundChild(ctx)) return undefined;
+			const decision = decideTodoSettle({
+				sessionId,
+				outcome: event?.outcome,
+				todos: getTodoSnapshot(sessionId).todos,
+				liveWork: readLiveWork(ctx),
+			});
+			if (!decision.nudge) return undefined;
+			return {
+				entries: [
+					...(Array.isArray(event?.entries) ? event.entries : []),
+					{
+						type: "custom_message" as const,
+						customType: TODO_REFRESH_CUSTOM_TYPE,
+						content: decision.text,
+						display: true,
+					},
+				],
+				continue: true,
+			};
+		},
+	);
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		clearTodowriteToolCallTodos();
 		const sessionId = getSessionId(ctx);
 		if (!sessionId) return;
+		forgetTodoSettleState(sessionId);
 		clearTodoSnapshot(sessionId);
 		overlay.disposeSession(sessionId);
 	});
@@ -606,6 +700,7 @@ export function registerTodoOverlay(
 		clearTodowriteToolCallTodos();
 		const sessionId = getSessionId(ctx);
 		if (!sessionId) return;
+		forgetTodoSettleState(sessionId);
 		clearTodoSnapshot(sessionId);
 		overlay.disposeSession(sessionId);
 	});

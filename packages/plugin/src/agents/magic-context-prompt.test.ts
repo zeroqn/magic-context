@@ -627,6 +627,13 @@ describe("the todo-list wording a published tool needs", () => {
         // nothing, so the wording names the moments a call belongs to.
         expect(present).toContain("call it as each step changes state");
         expect(present).toContain("shows them nothing");
+        // The delegation clause (2026-10-16): a child's or a background job's completion IS a step
+        // changing state — measured in a session where four children finished the list's items and the
+        // root never wrote again, leaving the panel open for hours
+        // (`.scratch/todo-desync/TARBALL-01a1421a.md`).
+        expect(present).toContain(
+            "A child session or a background job reporting that it finished is a step changing state",
+        );
         // The failure ../tool-bridge ticket 13 fixed: naming a tool that is no longer a pi tool.
         expect(present).not.toContain("Use `todowrite`");
     });

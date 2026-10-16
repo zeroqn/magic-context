@@ -246,6 +246,7 @@ import {
 	resolvePiProvenInputFloor,
 } from "./pi-proven-floor";
 import { abortInFlightRecomps, awaitInFlightRecomps } from "./pi-recomp-runner";
+import { noteTodoWrite, noteToolCall } from "./pi-todo-settle";
 import {
 	isBoundChild,
 	type PiToolResult,
@@ -495,6 +496,9 @@ function applyCompatiblePiTodoCapture(args: {
 	toolCallId?: string;
 	capture: CompatiblePiTodoCapture;
 }): void {
+	// The run's own record of "the list was written", on both call routes and whichever config is in
+	// force: the boundary nudge exists for the runs where this never happened (`pi-todo-settle.ts`).
+	noteTodoWrite(args.sessionId);
 	rememberTodowriteToolCallTodos(args.toolCallId, args.capture.todos);
 	if (args.todowriteEnabled) {
 		setTodoSnapshot(args.sessionId, args.capture.todos);
@@ -602,6 +606,9 @@ export function observePiToolCallStart(args: {
 	compactionOff: boolean;
 }): void {
 	try {
+		// Every call this session makes, whichever route it took — the todo refresh reads "did anything
+		// happen after the list was last written" off this (`pi-todo-settle.ts`).
+		noteToolCall(args.sessionId, args.name);
 		if (args.name === "todowrite") {
 			const todos = (
 				args.args as { todos?: Array<{ status?: string }> } | undefined

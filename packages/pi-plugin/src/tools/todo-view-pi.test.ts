@@ -3,13 +3,18 @@ import type {
 	ExtensionCommandContext,
 	ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
+import { __resetPiRegistryForTests, registerPiRegistry } from "../pi-registry";
+import { __resetTodoSettleForTests, noteTodoWrite } from "../pi-todo-settle";
 import {
 	__resetTodoSnapshotsForTests,
 	getTodoSnapshot,
 	registerTodoOverlay,
 	registerTodosCommand,
 	rememberTodowriteToolCallTodos,
+	renderTodowriteResult,
+	seedTodoSnapshotFromStateJson,
 	setTodoSnapshot,
+	TODO_REFRESH_CUSTOM_TYPE,
 	TodoOverlay,
 } from "./todo-view-pi";
 import { createTodowriteTool } from "./todowrite";
@@ -50,6 +55,7 @@ function widgetFactory(call: unknown[]) {
 }
 beforeEach(() => {
 	__resetTodoSnapshotsForTests();
+	__resetTodoSettleForTests();
 });
 describe("todowrite tool rendering", () => {
 	it("renders glyph lines while preserving the exact JSON text result", async () => {
@@ -526,5 +532,223 @@ describe("TodoOverlay lifecycle", () => {
 		const lines = widget.render(120);
 		expect(lines).toHaveLength(13); // header + 11 tasks + tail
 		expect(lines[lines.length - 1]).toContain("+3 more");
+	});
+});
+
+describe("the todo contract gate", () => {
+	it("refuses a payload the capture would ignore, and says the list did not move", async () => {
+		const tool = createTodowriteTool();
+		const result = (await tool.execute(
+			"call-bad",
+			{ todos: [{ content: "Build", status: "done" }] } as never,
+			undefined,
+			undefined,
+			{} as never,
+		)) as { content: Array<{ text: string }>; isError?: boolean };
+		expect(result.isError).toBe(true);
+		expect(result.content[0].text).toContain("NOT updated");
+		expect(result.content[0].text).toContain('todos[0].status is "done"');
+		expect(result.content[0].text).toContain(
+			"pending, in_progress, completed, cancelled",
+		);
+	});
+
+	it("names an out-of-enum priority and a missing content too", async () => {
+		const tool = createTodowriteTool();
+		const priority = (await tool.execute(
+			"call-priority",
+			{
+				todos: [{ content: "Build", status: "pending", priority: "urgent" }],
+			} as never,
+			undefined,
+			undefined,
+			{} as never,
+		)) as { content: Array<{ text: string }>; isError?: boolean };
+		expect(priority.isError).toBe(true);
+		expect(priority.content[0].text).toContain('todos[0].priority is "urgent"');
+
+		const content = (await tool.execute(
+			"call-content",
+			{ todos: [{ status: "pending" }] } as never,
+			undefined,
+			undefined,
+			{} as never,
+		)) as { content: Array<{ text: string }>; isError?: boolean };
+		expect(content.content[0].text).toContain("todos[0].content");
+		// The empty list is legal: it is how a call clears the board.
+		const cleared = (await tool.execute(
+			"call-empty",
+			{ todos: [] } as never,
+			undefined,
+			undefined,
+			{} as never,
+		)) as { content: Array<{ text: string }>; isError?: boolean };
+		expect(cleared.isError).toBeUndefined();
+		expect(cleared.content[0].text).toBe("[]");
+	});
+
+	it("renders a refused call as an error, never as an empty list", () => {
+		const rendered = renderTodowriteResult(
+			{
+				content: [
+					{ type: "text", text: "todowrite: the list was NOT updated — nope." },
+				],
+				isError: true,
+			},
+			identityTheme,
+		)
+			.render(200)
+			.join("\n");
+		expect(rendered).toContain("NOT updated");
+		expect(rendered).not.toContain("No todos");
+	});
+});
+
+describe("a restored list says so", () => {
+	it("marks the heading only while the list came from storage", () => {
+		const overlay = new TodoOverlay();
+		const { ui, setWidgetCalls } = makeUi();
+		seedTodoSnapshotFromStateJson(
+			"ses-restored",
+			JSON.stringify([{ content: "Carried over", status: "pending" }]),
+		);
+		overlay.setUICtx("ses-restored", ui);
+		overlay.update("ses-restored");
+		const widget = widgetFactory(setWidgetCalls[0])(
+			{ requestRender: () => undefined },
+			identityTheme,
+		);
+		expect(widget.render(120)[0]).toContain("· restored");
+
+		// The first write of the session clears it: the list is this session's own from here on.
+		setTodoSnapshot("ses-restored", [
+			{ content: "Carried over", status: "in_progress" },
+		]);
+		overlay.update("ses-restored");
+		expect(widget.render(120)[0]).not.toContain("· restored");
+		overlay.dispose();
+	});
+});
+
+describe("the run-boundary nudge", () => {
+	const LIVE_WORK_SYMBOL = Symbol.for("pi-host-bridge:live-work");
+
+	function settle(
+		sessionId = "ses-settle",
+		liveWork: unknown = { count: 0, names: [] },
+	) {
+		const handlers = new Map<
+			string,
+			(event: unknown, ctx: unknown) => unknown
+		>();
+		(globalThis as Record<symbol, unknown>)[LIVE_WORK_SYMBOL] = () => liveWork;
+		registerTodoOverlay(
+			{
+				on: (event: string, handler: (e: unknown, c: unknown) => unknown) =>
+					handlers.set(event, handler),
+			} as never,
+			{ readLastTodoState: () => null },
+		);
+		const ctx = {
+			hasUI: true,
+			ui: makeUi().ui,
+			sessionManager: {
+				getSessionId: () => sessionId,
+				getSessionFile: () => `/tmp/${sessionId}.jsonl`,
+			},
+		};
+		return {
+			handlers,
+			ctx,
+			// A run that ended `completed` is the default the tests vary from; the event's own
+			// `entries` must be passed explicitly wherever the merge contract is the subject.
+			fire: async (event: Record<string, unknown> = {}) =>
+				handlers.get("agent_before_settle")?.(
+					{ outcome: "completed", ...event },
+					ctx,
+				) as
+					| { entries?: Array<Record<string, unknown>>; continue?: boolean }
+					| undefined,
+			agentStart: async () => handlers.get("agent_start")?.({}, ctx),
+		};
+	}
+
+	it("appends one entry and asks for one more request when the run ended with the list open", async () => {
+		const { fire } = settle();
+		setTodoSnapshot("ses-settle", [
+			{ content: "One", status: "completed" },
+			{ content: "Two", status: "in_progress" },
+		]);
+		const result = await fire({
+			entries: [{ type: "custom", customType: "theirs" }],
+		});
+		expect(result?.continue).toBe(true);
+		// pi's contract: a handler's entries replace the accumulated drafts, so the other extension's
+		// entry must still be in the returned array.
+		expect(result?.entries).toHaveLength(2);
+		expect(result?.entries?.[0]).toEqual({
+			type: "custom",
+			customType: "theirs",
+		});
+		expect(result?.entries?.[1]).toMatchObject({
+			type: "custom_message",
+			customType: TODO_REFRESH_CUSTOM_TYPE,
+			display: true,
+		});
+		expect(String(result?.entries?.[1].content)).toContain(
+			"This run ended with the task list still open",
+		);
+	});
+
+	it("stays quiet while anything is still running, and after a write in this run", async () => {
+		const midDelegation = settle("ses-busy", { count: 1, names: ["child-2"] });
+		setTodoSnapshot("ses-busy", [{ content: "Two", status: "in_progress" }]);
+		expect(await midDelegation.fire()).toBeUndefined();
+
+		const written = settle("ses-written");
+		setTodoSnapshot("ses-written", [{ content: "Two", status: "in_progress" }]);
+		await written.agentStart();
+		noteTodoWrite("ses-written");
+		expect(await written.fire()).toBeUndefined();
+	});
+
+	it("does not nudge inside a bound child session", async () => {
+		__resetPiRegistryForTests();
+		const unregister = registerPiRegistry({
+			dbPath: ":memory:",
+			projectDir: "/tmp/settle-bound",
+			registry: {
+				transformContext: async () => undefined,
+				compact: async () => undefined,
+				scrubMessage: () => {},
+				bindChild: () => {},
+				clearSession: () => {},
+			},
+		});
+		const facade = (globalThis as Record<symbol, unknown>)[
+			Symbol.for("@cortexkit/magic-context:pi-registry")
+		] as { bindChild: (input: Record<string, unknown>) => void };
+		facade.bindChild({
+			childSessionFile: "/tmp/ses-child.jsonl",
+			cwd: "/tmp/settle-bound",
+		});
+		try {
+			const { fire } = settle("ses-child");
+			setTodoSnapshot("ses-child", [{ content: "Two", status: "in_progress" }]);
+			expect(await fire()).toBeUndefined();
+		} finally {
+			unregister();
+			__resetPiRegistryForTests();
+		}
+	});
+
+	it("does not nudge on an aborted run, and asks only once for one list", async () => {
+		const { fire, agentStart } = settle("ses-once");
+		setTodoSnapshot("ses-once", [{ content: "Two", status: "in_progress" }]);
+		expect(await fire({ outcome: "aborted" })).toBeUndefined();
+		expect((await fire({ outcome: "completed" }))?.continue).toBe(true);
+		expect(await fire({ outcome: "completed" })).toBeUndefined();
+		await agentStart();
+		expect(await fire({ outcome: "completed" })).toBeUndefined();
 	});
 });
