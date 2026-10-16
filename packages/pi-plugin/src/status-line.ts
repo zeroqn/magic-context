@@ -2,6 +2,12 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+	getLoadedLocalEmbeddingRuntimes,
+	type LocalEmbeddingRuntime,
+	resolveLocalEmbeddingWorkerRuntime,
+} from "@magic-context/core/features/magic-context/memory/embedding-local";
+import { getProjectLocalEmbeddingRuntime } from "@magic-context/core/features/magic-context/project-embedding-registry";
 import type { ContextDatabase } from "@magic-context/core/features/magic-context/storage";
 import { resolvePiWindowGeometry } from "./pi-context-limit";
 import {
@@ -51,8 +57,6 @@ export function registerStatusLine(
 	pi: ExtensionAPI,
 	deps: StatusLineDeps,
 ): void {
-	void deps.projectIdentity;
-
 	pi.on("session_start", async (_event, ctx) =>
 		updateStatusLine(ctx, deps, true),
 	);
@@ -81,7 +85,12 @@ export function updateStatusLine(
 ): void {
 	const sessionId = resolveSessionId(ctx);
 	if (!sessionId) return;
-	const text = renderStatusText(ctx, deps.db, sessionId);
+	const text = renderStatusText(
+		ctx,
+		deps.db,
+		sessionId,
+		resolveOnnxRuntimeStatus(deps.projectIdentity),
+	);
 	if (!force && lastRenderedBySession.get(sessionId) === text) return;
 	lastRenderedBySession.set(sessionId, text);
 	ctx.ui.setStatus(STATUS_KEY, text);
@@ -91,6 +100,7 @@ export function renderStatusText(
 	ctx: ExtensionContext,
 	db: ContextDatabase,
 	sessionId: string,
+	onnxRuntime: OnnxRuntimeStatus | null = null,
 ): string {
 	const usage = ctx.getContextUsage?.();
 	const meta = readSessionMetaStatus(db, sessionId);
@@ -147,7 +157,38 @@ export function renderStatusText(
 	const inputTokens = pressure?.inputTokens;
 	const pct = pressure?.percentage;
 	const state = renderHistorianState(meta, recompSessions.has(sessionId));
-	return `mc: ${inputTokens === undefined ? "--" : fmt(inputTokens)} (${pct === undefined ? "--" : `${Math.round(pct)}%`}) · ${state}`;
+	const runtime = onnxRuntime ? ` · ${formatOnnxRuntime(onnxRuntime)}` : "";
+	return `mc: ${inputTokens === undefined ? "--" : fmt(inputTokens)} (${pct === undefined ? "--" : `${Math.round(pct)}%`}) · ${state}${runtime}`;
+}
+
+export interface OnnxRuntimeStatus {
+	/** The project's configured `embedding.local_runtime`. */
+	preference: LocalEmbeddingRuntime;
+	/** Runtimes that have actually loaded in this process; empty until the first load. */
+	loaded: readonly ("native" | "wasm")[];
+}
+
+/**
+ * This project's local ONNX runtime, or null when the project does not use the local
+ * provider (remote, synapse, off, or not registered yet) — there is no ONNX runtime to name.
+ */
+export function resolveOnnxRuntimeStatus(projectIdentity: string): OnnxRuntimeStatus | null {
+	const preference = getProjectLocalEmbeddingRuntime(projectIdentity);
+	if (!preference) return null;
+	return { preference, loaded: getLoadedLocalEmbeddingRuntimes() };
+}
+
+/**
+ * `<configured>→<effective>`: the runtime that has actually loaded once one has, and the
+ * host-resolved expectation before that. Electron always runs the WASM build, so it reads
+ * wasm — as do Bun hosts below 1.4, whose native teardown can panic the process.
+ */
+function formatOnnxRuntime(status: OnnxRuntimeStatus): string {
+	const loaded = [...new Set(status.loaded)].sort();
+	const resolved = resolveLocalEmbeddingWorkerRuntime(status.preference);
+	const effective =
+		loaded.length > 0 ? loaded.join("+") : resolved === "electron" ? "wasm" : resolved;
+	return `onnx ${status.preference}→${effective}`;
 }
 
 function renderHistorianState(
