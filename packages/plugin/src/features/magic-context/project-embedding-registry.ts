@@ -40,7 +40,7 @@ import {
 import { invalidateProject } from "./memory/embedding-cache";
 import { dominantEmbeddingFailure, type EmbeddingFailure } from "./memory/embedding-failure";
 import { getEmbeddingProviderIdentity } from "./memory/embedding-identity";
-import { LocalEmbeddingProvider } from "./memory/embedding-local";
+import { LocalEmbeddingProvider, type LocalEmbeddingRuntime } from "./memory/embedding-local";
 import { OpenAICompatibleEmbeddingProvider } from "./memory/embedding-openai";
 import type { EmbeddingProvider, EmbeddingPurpose } from "./memory/embedding-provider";
 import {
@@ -2469,6 +2469,20 @@ export function getProjectEmbeddingSnapshot(
 ): ProjectEmbeddingRegistrationSnapshot | null {
     const registration = projectRegistrations.get(projectIdentity);
     return registration ? snapshotFor(registration) : null;
+}
+
+/**
+ * The project's configured ONNX runtime preference, or null when the project does not use
+ * the local provider. Unlike `getProjectEmbeddingSnapshot` this reads the registration
+ * directly, with no snapshot allocated, for callers on a hot path.
+ */
+export function getProjectLocalEmbeddingRuntime(
+    projectIdentity: string,
+): LocalEmbeddingRuntime | null {
+    const registration = projectRegistrations.get(projectIdentity);
+    if (!registration || registration.observationMode) return null;
+    if (registration.config.provider !== "local") return null;
+    return registration.config.local_runtime ?? "auto";
 }
 
 /**
