@@ -370,6 +370,17 @@ function directoryBytes(path: string): number | null {
     }
 }
 
+/**
+ * Distinct ONNX runtimes a provider has actually loaded in this process. Unlike
+ * `getLocalEmbeddingNativeMemoryStats` this walks no model-cache directory, so a
+ * caller that only wants the runtime (a status line) can ask on a hot path.
+ */
+export function getLoadedLocalEmbeddingRuntimes(): Array<"native" | "wasm"> {
+    return [
+        ...new Set([...loadedLocalEmbeddingRuntimes.values()].map((entry) => entry.runtime)),
+    ].sort();
+}
+
 /** ONNX does not expose arena residency; report loaded runtimes and serialized model bytes. */
 export function getLocalEmbeddingNativeMemoryStats(): LocalEmbeddingNativeMemoryStats {
     const loaded = [...loadedLocalEmbeddingRuntimes.values()];
@@ -377,7 +388,7 @@ export function getLocalEmbeddingNativeMemoryStats(): LocalEmbeddingNativeMemory
         loaded: loaded.length > 0,
         providerCount: loaded.length,
         models: [...new Set(loaded.map((entry) => entry.model))].sort(),
-        runtimes: [...new Set(loaded.map((entry) => entry.runtime))].sort(),
+        runtimes: getLoadedLocalEmbeddingRuntimes(),
         modelCacheBytes: loaded.length > 0 ? directoryBytes(modelCacheDirForRuntime()) : 0,
         rssDeltaAtLoad: loaded.reduce((sum, entry) => sum + entry.rssDeltaAtLoad, 0),
         externalDeltaAtLoad: loaded.reduce((sum, entry) => sum + entry.externalDeltaAtLoad, 0),
