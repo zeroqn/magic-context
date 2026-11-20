@@ -291,14 +291,12 @@ export function registerMagicContextTools(
 	// One cast for the whole set: each tool keeps its own schema (`ctx_search`'s args are not
 	// `ToolDefinition`'s defaults), and OMP's `loadMode` rides along on the ones `surfaceTool` marks,
 	// so the map's value type is the widest definition rather than any single tool's.
-	return new Map<string, ToolDefinition>(
-		[
-			[ctxSearch.name, ctxSearch],
-			[ctxMemory.name, ctxMemory],
-			[ctxNote.name, ctxNote],
-			[ctxExpand.name, ctxExpand],
-			[ctxReduce.name, ctxReduce],
-			...(todowrite ? [[todowrite.name, todowrite]] : []),
-		] as [string, ToolDefinition][],
-	);
+	return new Map<string, ToolDefinition>([
+		[ctxSearch.name, ctxSearch],
+		[ctxMemory.name, ctxMemory],
+		[ctxNote.name, ctxNote],
+		[ctxExpand.name, ctxExpand],
+		[ctxReduce.name, ctxReduce],
+		...(todowrite ? [[todowrite.name, todowrite]] : []),
+	] as [string, ToolDefinition][]);
 }

@@ -197,7 +197,10 @@ export function decideTodoSettle(input: TodoSettleInput): TodoSettleDecision {
 	if (input.outcome !== "completed") return { nudge: false };
 	if (!input.sessionId) return { nudge: false };
 	// The list was the run's last word: written, and nothing done since. Nothing to reconcile.
-	if (wroteThisRun.has(input.sessionId) && !workedSinceWrite.has(input.sessionId)) {
+	if (
+		wroteThisRun.has(input.sessionId) &&
+		!workedSinceWrite.has(input.sessionId)
+	) {
 		return { nudge: false };
 	}
 

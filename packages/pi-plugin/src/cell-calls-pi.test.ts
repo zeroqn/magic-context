@@ -11,7 +11,12 @@ import { describe, expect, it } from "bun:test";
 import { cellToolCalls } from "./cell-calls-pi";
 
 function result(details: unknown) {
-	return { role: "toolResult", toolCallId: "c", content: [{ type: "text", text: "out" }], details };
+	return {
+		role: "toolResult",
+		toolCallId: "c",
+		content: [{ type: "text", text: "out" }],
+		details,
+	};
 }
 
 describe("cellToolCalls", () => {
@@ -33,9 +38,11 @@ describe("cellToolCalls", () => {
 	});
 
 	it("answers a call with no params with an empty object, not undefined", () => {
-		expect(cellToolCalls(result({ cellCalls: [{ host: "tool", args: ["ctx_expand"] }] }))).toEqual([
-			{ name: "ctx_expand", params: {} },
-		]);
+		expect(
+			cellToolCalls(
+				result({ cellCalls: [{ host: "tool", args: ["ctx_expand"] }] }),
+			),
+		).toEqual([{ name: "ctx_expand", params: {} }]);
 	});
 
 	it("treats anything else as no information", () => {
@@ -43,8 +50,16 @@ describe("cellToolCalls", () => {
 		expect(cellToolCalls({ role: "toolResult" })).toEqual([]);
 		expect(cellToolCalls(result({}))).toEqual([]);
 		expect(cellToolCalls(result({ cellCalls: "nonsense" }))).toEqual([]);
-		expect(cellToolCalls(result({ cellCalls: [null, 7, { host: "tool" }, { host: "tool", args: [] }] }))).toEqual([]);
+		expect(
+			cellToolCalls(
+				result({
+					cellCalls: [null, 7, { host: "tool" }, { host: "tool", args: [] }],
+				}),
+			),
+		).toEqual([]);
 		// A record whose first argument is not a name is not a bridge call.
-		expect(cellToolCalls(result({ cellCalls: [{ host: "tool", args: [{}, {}] }] }))).toEqual([]);
+		expect(
+			cellToolCalls(result({ cellCalls: [{ host: "tool", args: [{}, {}] }] })),
+		).toEqual([]);
 	});
 });

@@ -5,7 +5,11 @@ import {
 	registerProjectEmbedding,
 } from "@magic-context/core/features/magic-context/project-embedding-registry";
 import { closeQuietly } from "@magic-context/core/shared/sqlite-helpers";
-import { registerStatusLine, renderStatusText, resolveOnnxRuntimeStatus } from "./status-line";
+import {
+	registerStatusLine,
+	renderStatusText,
+	resolveOnnxRuntimeStatus,
+} from "./status-line";
 import { createFakePi, createTestDb, fakeContext } from "./test-utils.test";
 
 const FEATURES = { memoryEnabled: true, gitCommitEnabled: false };
@@ -88,10 +92,15 @@ describe("Pi footer status", () => {
 		const db = createTestDb();
 		try {
 			const sessionId = "ses-footer-onnx";
-			const text = renderStatusText(usageContext(sessionId) as never, db, sessionId, {
-				preference: "auto",
-				loaded: [],
-			});
+			const text = renderStatusText(
+				usageContext(sessionId) as never,
+				db,
+				sessionId,
+				{
+					preference: "auto",
+					loaded: [],
+				},
+			);
 
 			expect(text).toContain("mc: 50K (63%)");
 			expect(text).toMatch(/ · onnx auto→(native|wasm)$/);
@@ -104,10 +113,15 @@ describe("Pi footer status", () => {
 		const db = createTestDb();
 		try {
 			const sessionId = "ses-footer-onnx-loaded";
-			const text = renderStatusText(usageContext(sessionId) as never, db, sessionId, {
-				preference: "native",
-				loaded: ["wasm"],
-			});
+			const text = renderStatusText(
+				usageContext(sessionId) as never,
+				db,
+				sessionId,
+				{
+					preference: "native",
+					loaded: ["wasm"],
+				},
+			);
 
 			expect(text).toContain("onnx native→wasm");
 		} finally {
@@ -119,10 +133,15 @@ describe("Pi footer status", () => {
 		const db = createTestDb();
 		try {
 			const sessionId = "ses-footer-onnx-mixed";
-			const text = renderStatusText(usageContext(sessionId) as never, db, sessionId, {
-				preference: "auto",
-				loaded: ["wasm", "native", "wasm"],
-			});
+			const text = renderStatusText(
+				usageContext(sessionId) as never,
+				db,
+				sessionId,
+				{
+					preference: "auto",
+					loaded: ["wasm", "native", "wasm"],
+				},
+			);
 
 			expect(text).toContain("onnx auto→native+wasm");
 		} finally {
@@ -134,7 +153,11 @@ describe("Pi footer status", () => {
 		const db = createTestDb();
 		try {
 			const sessionId = "ses-footer-no-onnx";
-			const text = renderStatusText(usageContext(sessionId) as never, db, sessionId);
+			const text = renderStatusText(
+				usageContext(sessionId) as never,
+				db,
+				sessionId,
+			);
 
 			expect(text).not.toContain("onnx");
 		} finally {
@@ -176,7 +199,10 @@ describe("Pi footer ONNX runtime lookup", () => {
 	it("defaults an unset local preference to auto", () => {
 		const db = createTestDb();
 		try {
-			register(db, "pi-onnx-auto", { provider: "local", model: "fake-embedding-model" });
+			register(db, "pi-onnx-auto", {
+				provider: "local",
+				model: "fake-embedding-model",
+			});
 
 			expect(resolveOnnxRuntimeStatus("pi-onnx-auto")).toMatchObject({
 				preference: "auto",
