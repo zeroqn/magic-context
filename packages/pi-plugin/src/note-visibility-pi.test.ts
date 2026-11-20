@@ -130,13 +130,21 @@ describe("hasVisibleNoteReadCallPi, for a call a cell made", () => {
 
 	it("does not count a write, or another capability, or a trace-less result", () => {
 		expect(
-			hasVisibleNoteReadCallPi([trace(["ctx_note", { action: "write", content: "x" }])]),
+			hasVisibleNoteReadCallPi([
+				trace(["ctx_note", { action: "write", content: "x" }]),
+			]),
 		).toBe(false);
-		expect(hasVisibleNoteReadCallPi([trace(["ctx_search", { query: "x" }])])).toBe(false);
+		expect(
+			hasVisibleNoteReadCallPi([trace(["ctx_search", { query: "x" }])]),
+		).toBe(false);
 		// An older code mode records nothing, and "no trace" must mean "no information".
 		expect(
 			hasVisibleNoteReadCallPi([
-				{ role: "toolResult", toolCallId: "c", content: [{ type: "text", text: "out" }] },
+				{
+					role: "toolResult",
+					toolCallId: "c",
+					content: [{ type: "text", text: "out" }],
+				},
 			]),
 		).toBe(false);
 	});
@@ -144,6 +152,8 @@ describe("hasVisibleNoteReadCallPi, for a call a cell made", () => {
 	it("returns true when the read was a keyword-less positional call, as monty delivers it", () => {
 		// `tool("ctx_note", {"action": "read"})` arrives as a trailing object, the same way
 		// `tool("ctx_note", action="read")` does — the bridge's own note (adapter.ts:305-307).
-		expect(hasVisibleNoteReadCallPi([trace(["ctx_note", { action: "read" }])])).toBe(true);
+		expect(
+			hasVisibleNoteReadCallPi([trace(["ctx_note", { action: "read" }])]),
+		).toBe(true);
 	});
 });

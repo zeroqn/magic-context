@@ -408,8 +408,8 @@ import {
 } from "./pass-tag-projection-pi";
 import { adaptPiAppendCompaction } from "./pi-append-compaction";
 import {
-	PiContextBudget,
 	PI_CONTEXT_BUDGET,
+	PiContextBudget,
 	PiContextDeadlineError,
 	PiHistorianJoinDeadlineError,
 } from "./pi-context-budget";

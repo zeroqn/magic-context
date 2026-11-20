@@ -215,7 +215,7 @@ describe("an instance's publication", () => {
 			expect(textOf(refused)).toContain("not available");
 			expect(calls).toEqual([
 				'ctx_search:{"query":"wal"}',
-				"todowrite:{\"todos\":[]}",
+				'todowrite:{"todos":[]}',
 			]);
 		} finally {
 			unpublish();

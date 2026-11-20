@@ -72,7 +72,6 @@ import {
 	getSessionsWithPendingPiMarker,
 	updateSessionMeta,
 } from "@magic-context/core/features/magic-context/storage";
-import type { SessionMeta } from "@magic-context/core/features/magic-context/types";
 import {
 	applySqliteTuningPragmas,
 	closeDatabase,
@@ -85,6 +84,7 @@ import {
 	loadProtectedTailMeta,
 } from "@magic-context/core/features/magic-context/storage-meta-persisted";
 import { describeStorageUnavailability } from "@magic-context/core/features/magic-context/storage-unavailable-reason";
+import type { SessionMeta } from "@magic-context/core/features/magic-context/types";
 import { runDeferredV22Backfill } from "@magic-context/core/features/magic-context/v22-deferred-backfill";
 import { cavemanWordRulesForLanguage } from "@magic-context/core/hooks/magic-context/caveman";
 import { setCtxReduceRegisteredGlobally } from "@magic-context/core/hooks/magic-context/ctx-reduce-availability";
@@ -254,12 +254,12 @@ import {
 	resolvePiProvenInputFloor,
 } from "./pi-proven-floor";
 import { abortInFlightRecomps, awaitInFlightRecomps } from "./pi-recomp-runner";
-import { noteTodoWrite, noteToolCall } from "./pi-todo-settle";
 import {
 	isBoundChild,
 	type PiToolResult,
 	registerPiRegistry,
 } from "./pi-registry";
+import { noteTodoWrite, noteToolCall } from "./pi-todo-settle";
 import {
 	armPiRecoveryForHostOverflowCompaction,
 	handlePiProviderFailure,
@@ -3501,10 +3501,15 @@ async function startPiMagicContextRuntime(
 			// treated as "not a subagent"; the persist half then fails on its own.
 			let sessionMetaIsSubagent = false;
 			try {
-				sessionMetaIsSubagent =
-					getOrCreateSessionMeta(db, sessionId).isSubagent;
+				sessionMetaIsSubagent = getOrCreateSessionMeta(
+					db,
+					sessionId,
+				).isSubagent;
 			} catch (err) {
-				warn("message_end: session meta unavailable for todowrite capture:", err);
+				warn(
+					"message_end: session meta unavailable for todowrite capture:",
+					err,
+				);
 			}
 			try {
 				if (!sessionMetaIsSubagent) {

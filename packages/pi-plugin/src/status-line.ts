@@ -172,7 +172,9 @@ export interface OnnxRuntimeStatus {
  * This project's local ONNX runtime, or null when the project does not use the local
  * provider (remote, synapse, off, or not registered yet) — there is no ONNX runtime to name.
  */
-export function resolveOnnxRuntimeStatus(projectIdentity: string): OnnxRuntimeStatus | null {
+export function resolveOnnxRuntimeStatus(
+	projectIdentity: string,
+): OnnxRuntimeStatus | null {
 	const preference = getProjectLocalEmbeddingRuntime(projectIdentity);
 	if (!preference) return null;
 	return { preference, loaded: getLoadedLocalEmbeddingRuntimes() };
@@ -187,7 +189,11 @@ function formatOnnxRuntime(status: OnnxRuntimeStatus): string {
 	const loaded = [...new Set(status.loaded)].sort();
 	const resolved = resolveLocalEmbeddingWorkerRuntime(status.preference);
 	const effective =
-		loaded.length > 0 ? loaded.join("+") : resolved === "electron" ? "wasm" : resolved;
+		loaded.length > 0
+			? loaded.join("+")
+			: resolved === "electron"
+				? "wasm"
+				: resolved;
 	return `onnx ${status.preference}→${effective}`;
 }
 
