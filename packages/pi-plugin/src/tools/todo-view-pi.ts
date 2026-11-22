@@ -248,6 +248,21 @@ function activeTitleCount(todos: readonly TodoItem[]): number {
 	return todos.filter((todo) => !TITLE_DONE_STATUSES.has(todo.status)).length;
 }
 
+/** A row without a theme: status as a glyph, then the id and content (ticket 08's plain form). */
+function plainTodoLine(todo: TodoItem): string {
+	const glyph =
+		todo.status === "completed"
+			? "✓"
+			: todo.status === "in_progress"
+				? "▸"
+				: todo.status === "cancelled"
+					? "✗"
+					: "•";
+	const id = todo.id ? ` ${todo.id}` : "";
+	const priority = todo.priority ? ` (${todo.priority})` : "";
+	return `${glyph}${id} ${todo.content}${priority}`;
+}
+
 function formatCounts(counts: TodoCounts): string {
 	if (counts.total === 0) return "No todos";
 	const parts = [`${counts.completed}/${counts.total} completed`];
@@ -445,6 +460,8 @@ function isOverlayLive(todo: TodoItem): boolean {
 
 export class TodoOverlay {
 	private uiCtx: ExtensionUIContext | undefined;
+	/** The host's run mode. Non-terminal hosts ignore widget factories, so they get plain rows instead. */
+	private mode: string | undefined;
 	private sessionId: string | undefined;
 	private widgetRegistered = false;
 	private tui: Pick<TUI, "requestRender"> | undefined;
@@ -452,13 +469,18 @@ export class TodoOverlay {
 	private hiddenCompletedTaskIds = new Set<string>();
 	private lastTodoKeys = new Set<string>();
 
-	setUICtx(sessionId: string, ctx: ExtensionUIContext): void {
+	setUICtx(sessionId: string, ctx: ExtensionUIContext, mode?: string): void {
 		// Pi invalidates widget instances on /reload and session replacement. The
 		// factory-form widget below can recover only if we forget the old registration
 		// when either the UI proxy or the foreground session identity changes.
-		if (ctx !== this.uiCtx || sessionId !== this.sessionId) {
+		if (
+			ctx !== this.uiCtx ||
+			sessionId !== this.sessionId ||
+			mode !== this.mode
+		) {
 			this.uiCtx = ctx;
 			this.sessionId = sessionId;
+			this.mode = mode;
 			this.widgetRegistered = false;
 			this.tui = undefined;
 			this.resetCompletedDisplayState();
@@ -483,6 +505,18 @@ export class TodoOverlay {
 				this.widgetRegistered = false;
 				this.tui = undefined;
 			}
+			return;
+		}
+
+		if (this.mode !== undefined && this.mode !== "tui") {
+			// A host that declares a non-terminal mode cannot render a component: RPC mode ignores the
+			// factory form outright (`setWidget` only forwards string arrays). Send the same rows as plain
+			// text, once per update, so the list still exists there — minus theme colour and glyph styling.
+			this.uiCtx.setWidget(WIDGET_KEY, this.renderPlainWidget(), {
+				placement: "aboveEditor",
+			});
+			this.widgetRegistered = true;
+			this.tui = undefined;
 			return;
 		}
 
@@ -583,6 +617,34 @@ export class TodoOverlay {
 			});
 	}
 
+	/**
+	 * The same list as `renderWidget`, without a theme: plain rows for a host that cannot render a
+	 * component. State is carried by a text glyph rather than by colour (ticket 08's decision).
+	 */
+	private renderPlainWidget(): string[] {
+		if (!this.sessionId) return [];
+		const todos = getTodoSnapshot(this.sessionId).todos;
+		this.pruneCompletedDisplayState(todos);
+		const overlayTodos = this.selectOverlayTodos(todos);
+		if (overlayTodos.length === 0) return [];
+
+		const counts = countTodos(todos);
+		const hasInProgress = counts.inProgress > 0;
+		const restored = getTodoSnapshot(this.sessionId).restored
+			? " · restored"
+			: "";
+		const lines = [
+			`${hasInProgress ? "●" : "○"} Todos — ${formatCounts(counts)}${restored}`,
+		];
+		const { visible, hiddenCount } = capTodoRows(overlayTodos);
+		for (const [index, { todo }] of visible.entries()) {
+			const isLast = index === visible.length - 1 && hiddenCount === 0;
+			lines.push(`${isLast ? "└─" : "├─"} ${plainTodoLine(todo)}`);
+		}
+		if (hiddenCount > 0) lines.push(`└─ +${hiddenCount} more`);
+		return lines;
+	}
+
 	private renderWidget(theme: Theme, width: number): string[] {
 		if (!this.sessionId) return [];
 		const todos = getTodoSnapshot(this.sessionId).todos;
@@ -640,7 +702,7 @@ export function registerTodoOverlay(
 		if (!sessionId) return;
 		seedTodoSnapshotFromStateJson(sessionId, deps.readLastTodoState(sessionId));
 		if (!ctx.hasUI) return;
-		overlay.setUICtx(sessionId, ctx.ui);
+		overlay.setUICtx(sessionId, ctx.ui, (ctx as { mode?: string }).mode);
 		overlay.update(sessionId);
 	});
 
