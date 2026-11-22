@@ -1178,3 +1178,18 @@ Historian admission reads primary/fallback windows from the live Pi/OMP model re
 The full Pi suite initially reported 1,193 pass / 3 skip / 31 fail. The affected 344-test groups subsequently reported 340 pass / 4 fail, and the four remaining nested-historian cases passed after their mock window observations were supplied. The environment-only OMP/home and smart-note checks passed without product changes. Pi typecheck passed. No second full suite was run, as requested.
 
 Tail-hygiene parity is active. Persisted `last_nudge_undropped` and `last_nudge_level.postReduceGraceBaselineU` convert once at the stamped bust; `growthThreshold` is derived from calibrated T. No SQL column, migration, sidecar or fence change was added.
+
+---
+
+## 9. The todo widget has a plain-text form for non-terminal hosts
+
+**Pi's TUI:** the todo list registers a widget factory `(tui, theme) => Component`, which renders
+branches, counts and status glyphs in the theme's colours, and refreshes through `tui.requestRender()`.
+
+**Any host whose `ctx.mode` is declared and not `"tui"`** (pi's own RPC mode, an editor pendant, the
+Rust client in this repo): `setWidget` only forwards string arrays there — a factory is silently ignored
+(`packages/coding-agent/src/modes/rpc/rpc-mode.ts`, "Only support string arrays in RPC mode"), so the
+list would vanish without a word. `TodoOverlay` therefore sends the same rows as plain lines when a
+non-terminal mode is declared, once per update, with the state carried by a glyph (`✓ ▸ ✗ •`) instead of
+by colour. The heading, counts, `+N more` cap and per-row branch characters are identical; what is lost
+is the theme, the restored-note colouring, and clickable layout.

@@ -359,6 +359,54 @@ describe("/todos command", () => {
 		expect(notifyCalls).toEqual([["No todos yet.", "info"]]);
 	});
 });
+describe("TodoOverlay on a host without components", () => {
+	it("sends plain rows instead of a factory when the mode is rpc", () => {
+		setTodoSnapshot("ses-plain", [
+			{ id: "1", content: "Plan", status: "pending" },
+			{ id: "2", content: "Build", status: "in_progress" },
+			{ id: "3", content: "Ship", status: "completed" },
+		]);
+		const overlay = new TodoOverlay();
+		const { ui, setWidgetCalls } = makeUi();
+		overlay.setUICtx("ses-plain", ui, "rpc");
+		overlay.update("ses-plain");
+		expect(setWidgetCalls).toHaveLength(1);
+		expect(setWidgetCalls[0][0]).toBe("magic-context-todos");
+		// A host that cannot render a component must receive rows, never a factory.
+		expect(Array.isArray(setWidgetCalls[0][1])).toBe(true);
+		const rows = setWidgetCalls[0][1] as string[];
+		expect(rows[0]).toContain("Todos");
+		expect(rows.join("\n")).toContain("Build");
+		// State is carried by a glyph, since there is no theme to carry it.
+		expect(rows.join("\n")).toContain("▸");
+		expect(setWidgetCalls[0][2]).toEqual({ placement: "aboveEditor" });
+
+		// Every update refreshes the rows (there is no tui to request a render from).
+		setTodoSnapshot("ses-plain", [
+			{ id: "1", content: "Plan", status: "completed" },
+			{ id: "2", content: "Build", status: "in_progress" },
+			{ id: "3", content: "Ship", status: "completed" },
+		]);
+		overlay.update("ses-plain");
+		expect(setWidgetCalls.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("keeps the factory form when the mode is tui, and when no mode is declared", () => {
+		for (const mode of ["tui", undefined]) {
+			__resetTodoSnapshotsForTests();
+			setTodoSnapshot("ses-factory", [
+				{ id: "1", content: "Plan", status: "pending" },
+			]);
+			const overlay = new TodoOverlay();
+			const { ui, setWidgetCalls } = makeUi();
+			overlay.setUICtx("ses-factory", ui, mode);
+			overlay.update("ses-factory");
+			expect(setWidgetCalls).toHaveLength(1);
+			expect(typeof setWidgetCalls[0][1]).toBe("function");
+		}
+	});
+});
+
 describe("TodoOverlay lifecycle", () => {
 	it("registers once and refreshes after a todo state change", () => {
 		setTodoSnapshot("ses-overlay", [
