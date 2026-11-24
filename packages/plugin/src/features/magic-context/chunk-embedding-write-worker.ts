@@ -1,7 +1,6 @@
 import { setHarness } from "../../shared/harness";
 import { serveWorkerJobs } from "../../shared/reusable-worker-entry";
 import { Database } from "../../shared/sqlite";
-import { configureContextDatabasePragmas } from "../../shared/sqlite-context-pragmas";
 import { exitOnWorkerClose, isWorkerCloseMessage } from "../../shared/worker-shutdown";
 import type { ChunkEmbeddingWorkerRequest } from "./chunk-embedding-writer";
 import {
@@ -16,7 +15,11 @@ import {
     renewGitSweepLease,
 } from "./git-commits/sweep-coordinator";
 import { recordSessionProjectIdentity } from "./session-project-storage";
-import { enforceSchemaFence, LATEST_SUPPORTED_VERSION } from "./storage-db";
+import {
+    applyContextJournalMode,
+    enforceSchemaFence,
+    LATEST_SUPPORTED_VERSION,
+} from "./storage-db";
 
 serveWorkerJobs<{ path: string; harness: Parameters<typeof setHarness>[0]; timeout: number }>(
     (workerData, port) => {
@@ -28,7 +31,7 @@ serveWorkerJobs<{ path: string; harness: Parameters<typeof setHarness>[0]; timeo
         }
         const timeout = Math.max(0, Math.floor(workerData.timeout));
         db.exec(`PRAGMA busy_timeout=${timeout}; PRAGMA foreign_keys=ON`);
-        configureContextDatabasePragmas(db);
+        applyContextJournalMode(db, workerData.path);
         // Close this writable connection before the thread ends; see worker-shutdown.ts.
         exitOnWorkerClose(port, () => db.close(), false);
         port.on("message", (input: ChunkEmbeddingWorkerRequest) => {

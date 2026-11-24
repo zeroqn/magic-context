@@ -132,12 +132,12 @@ serveWorkerJobs<RawOrdinalWarmupInput>(async (input, port) => {
             } else if (input.indexMessage) {
                 const { setHarness } = await import("../../shared/harness");
                 setHarness(input.harness ?? "opencode");
-                const [{ indexMessageInShortChunks }, { configureContextDatabasePragmas }] =
+                const [{ indexMessageInShortChunks }, { applyContextJournalMode }] =
                     await Promise.all([
                         import("../../features/magic-context/message-index-bounded"),
-                        import("../../shared/sqlite-context-pragmas"),
+                        import("../../features/magic-context/storage-db"),
                     ]);
-                configureContextDatabasePragmas(db);
+                applyContextJournalMode(db, input.path);
                 const writer = db;
                 const message = input.indexMessage;
                 const cancellation = input.indexCancellation

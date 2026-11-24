@@ -6,12 +6,12 @@ import {
     getContextStoreUuid,
 } from "@magic-context/core/features/magic-context/context-store-uuid";
 import {
+    applyContextJournalMode,
     getPersistedSchemaVersion as getCorePersistedSchemaVersion,
     LATEST_SUPPORTED_VERSION,
 } from "@magic-context/core/features/magic-context/storage-db";
 import type { Database as DatabaseType } from "@magic-context/core/shared/sqlite";
 import { Database, openImmutableDatabase } from "@magic-context/core/shared/sqlite";
-import { configureContextDatabasePragmas } from "@magic-context/core/shared/sqlite-context-pragmas";
 import {
     ensureStorageDirectorySync,
     shouldEnforcePrivateStoragePermissions,
@@ -144,7 +144,7 @@ export function openExistingContextDatabase(
         if (minimumSupportedVersion !== undefined && persistedVersion < minimumSupportedVersion) {
             throw new OutdatedSchemaVersionError(path, persistedVersion, minimumSupportedVersion);
         }
-        configureContextDatabasePragmas(db, options.readonly);
+        applyContextJournalMode(db, path, options.readonly);
         if (!options.readonly) {
             // The CLI has no module route during database open. It can mint the
             // local store identity, but REGRESSED detection remains a later

@@ -1,8 +1,7 @@
 import { sessionLog } from "../../shared/logger";
 import { Database, isTransientSqliteError } from "../../shared/sqlite";
-import { configureContextDatabasePragmas } from "../../shared/sqlite-context-pragmas";
 import { closeQuietly } from "../../shared/sqlite-helpers";
-import { getDatabasePath } from "./storage-db";
+import { applyContextJournalMode, getDatabasePath } from "./storage-db";
 
 export type TransformDecisionHarness = "opencode" | "opencode2" | "pi";
 export type TransformSchedulerDecision =
@@ -777,7 +776,7 @@ function writeTransformDecisionRow(dbPath: string, row: TransformDecisionRow): v
     const db = new Database(dbPath);
     try {
         db.exec("PRAGMA busy_timeout=0");
-        configureContextDatabasePragmas(db);
+        applyContextJournalMode(db, dbPath);
         writeTransformDecisionRowOnDatabase(db, row, true);
     } finally {
         closeQuietly(db);

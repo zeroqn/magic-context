@@ -1183,8 +1183,19 @@ function journalMode(db: Database): string {
     }
 }
 
+/** Paths whose rollback-journal fallback this process has already logged. */
+const reportedRollbackJournal = new Set<string>();
+
 /**
  * Choose the journal mode for this connection's filesystem.
+ *
+ * Exported because the store is opened by more than the boot path: a worker
+ * thread, the per-turn transform-decision writer and the CLI each take their
+ * own connection to the same file. Journal mode is a property of the *file*,
+ * not of the connection, so one opener that asserts WAL puts the whole store
+ * back into it — measured 2026-11-24 on a virtiofs mount: the boot open logged
+ * `journal_mode=delete`, and the same file carried a `-wal` again minutes
+ * later. Every opener calls this rather than the WAL-only pragma helper.
  *
  * On a filesystem where WAL's assumptions do not hold (see `wal-filesystem.ts`)
  * the rollback journal is the only durable choice, and it MUST be paired with
@@ -1196,12 +1207,23 @@ function journalMode(db: Database): string {
  * (tests, CLI tools) rather than through an open path that owns the file; those
  * keep WAL, since this module cannot vouch for a path it was not given.
  */
-function applyJournalMode(db: Database, dbPath: string | undefined): void {
-    const unsafeFilesystem = dbPath === undefined ? null : detectWalUnsafeFilesystem(dbPath);
-    if (unsafeFilesystem === null) {
-        configureContextDatabasePragmas(db);
+export function applyContextJournalMode(
+    db: Database,
+    dbPath: string | undefined,
+    readonly = false,
+): void {
+    if (dbPath === undefined) {
+        configureContextDatabasePragmas(db, readonly);
         return;
     }
+    const unsafeFilesystem = detectWalUnsafeFilesystem(dbPath);
+    if (unsafeFilesystem === null) {
+        configureContextDatabasePragmas(db, readonly);
+        return;
+    }
+    // A read-only inspection cannot switch the file's mode, and must not try:
+    // its job is to report the store, not to change it.
+    if (readonly) return;
     db.exec("PRAGMA synchronous=FULL");
     // Only ask for the mode when it is not already in force: a journal-mode
     // change needs the exclusive lock, and a sibling process writing right now
@@ -1217,9 +1239,15 @@ function applyJournalMode(db: Database, dbPath: string | undefined): void {
     }
     const mode = journalMode(db);
     if (mode === "delete") {
-        log(
-            `[magic-context] ${unsafeFilesystem} cannot support SQLite WAL: using journal_mode=delete with synchronous=FULL for ${dbPath}`,
-        );
+        // Once per process and path: the per-turn decision writer would otherwise
+        // repeat this line on every turn, and nothing about it can change while
+        // the store stays on this one mount.
+        if (!reportedRollbackJournal.has(dbPath)) {
+            reportedRollbackJournal.add(dbPath);
+            log(
+                `[magic-context] ${unsafeFilesystem} cannot support SQLite WAL: using journal_mode=delete with synchronous=FULL for ${dbPath}`,
+            );
+        }
         return;
     }
     // The switch needs the exclusive lock and could not take it: either a sibling
@@ -1246,7 +1274,7 @@ export function initializeDatabase(
     // or writes: it defaults to OFF, which silently breaks every ON DELETE
     // CASCADE / SET NULL declared in the schema below and in migrations.
     db.exec("PRAGMA foreign_keys=ON");
-    applyJournalMode(db, dbPath);
+    applyContextJournalMode(db, dbPath);
     applySqliteTuningPragmas(db);
     db.exec(`
     CREATE TABLE IF NOT EXISTS tags (

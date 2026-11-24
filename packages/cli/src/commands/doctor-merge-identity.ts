@@ -9,6 +9,7 @@ import {
     projectDirectoryKey,
     readRememberedGitIdentity,
 } from "@magic-context/core/features/magic-context/memory/project-identity-cache";
+import { applyContextJournalMode } from "@magic-context/core/features/magic-context/storage-db";
 import {
     auditIdentityMerge,
     countIdentityRows,
@@ -18,7 +19,6 @@ import {
 import { getMagicContextStorageDir } from "@magic-context/core/shared/data-path";
 import { resolveOpenCodeDbPath } from "@magic-context/core/shared/opencode-db-path";
 import type { Database } from "@magic-context/core/shared/sqlite";
-import { configureContextDatabasePragmas } from "@magic-context/core/shared/sqlite-context-pragmas";
 import {
     ensureStorageDirectorySync,
     writeStorageFileAtomicSync,
@@ -485,7 +485,7 @@ export function runMergeIdentityCli(args: string[], deps: Partial<MergeIdentityD
     try {
         // Rows may have moved since the read-only preview; check the pair again on the
         // handle that is about to write.
-        configureContextDatabasePragmas(db);
+        applyContextJournalMode(db, dbPath);
         observed = observations(db, hostPath, storageDir);
         const allowances = assertMergePairSafe(db, observed, storageDir, from, to);
         const sourceDirs = observed
