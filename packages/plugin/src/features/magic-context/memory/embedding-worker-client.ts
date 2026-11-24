@@ -111,6 +111,66 @@ function describeStuckWorker(state: EmbeddingWorkerState, stopSince: number | nu
     return `${describeRunning(stopSince, at)}, no answer to the stop request`;
 }
 
+type BunRuntimeApi = {
+    isStandaloneExecutable?: boolean;
+    which?: (name: string) => string | null;
+    spawnSync?: (options: {
+        cmd: string[];
+        env: Record<string, string | undefined>;
+        stdout: "ignore";
+        stderr: "ignore";
+    }) => { exitCode: number | null };
+};
+
+function bunRuntime(): BunRuntimeApi | undefined {
+    return (globalThis as { Bun?: BunRuntimeApi }).Bun;
+}
+
+/**
+ * Whether the executable running this process can also act as the Bun CLI.
+ *
+ * Every compiled executable answers `--version` under `BUN_BE_BUN=1`, but only one that carries
+ * the Bun command line runs a script: `bun build --compile --aot` embeds the runtime without it
+ * and the child exits 70. An empty script is the only probe that tells the two builds apart.
+ */
+function hostExecutableRunsScripts(): boolean {
+    const bun = bunRuntime();
+    if (!bun?.spawnSync) return true;
+    try {
+        const probe = bun.spawnSync({
+            cmd: [process.execPath, "-e", "0"],
+            env: { ...process.env, BUN_BE_BUN: "1" },
+            stdout: "ignore",
+            stderr: "ignore",
+        });
+        return probe.exitCode === 0;
+    } catch {
+        // The executable could not start at all; a real Bun is the better bet either way.
+        return false;
+    }
+}
+
+/**
+ * The runtime that should own the worker child, or `undefined` for `process.execPath`.
+ *
+ * `process.execPath` is right when it is `bun` itself or a compiled executable that includes the
+ * Bun command line. It is wrong on an executable without it, where the worker child dies with
+ * "BUN_BE_BUN is set, but this executable doesn't include the Bun command line".
+ */
+function resolveWorkerExecPath(): string | undefined {
+    const explicit = process.env.MAGIC_CONTEXT_BUN?.trim();
+    if (explicit) return explicit;
+    const bun = bunRuntime();
+    if (!bun?.isStandaloneExecutable || hostExecutableRunsScripts()) return undefined;
+    const found = bun.which?.("bun") ?? undefined;
+    if (!found) {
+        log(
+            "[magic-context] this host executable cannot run a script as the Bun CLI and no `bun` is on PATH; local embeddings cannot start. Set MAGIC_CONTEXT_BUN to the path of a Bun.",
+        );
+    }
+    return found;
+}
+
 /** One model owner; a dead or unresponsive worker rejects every outstanding request. */
 export class EmbeddingWorkerClient {
     private worker: EmbeddingWorkerHandle | null = null;
@@ -164,6 +224,7 @@ export class EmbeddingWorkerClient {
                 ?.isStandaloneExecutable;
         const inProcess = !compiledBun && (await this.prepareTelemetry());
         if (this.disposed) throw new Error("embedding worker disposed");
+        const workerExecPath = compiledBun ? resolveWorkerExecPath() : undefined;
         const worker = inProcess
             ? new Worker(this.entry, { workerData: this.data })
             : fork(
@@ -175,6 +236,7 @@ export class EmbeddingWorkerClient {
                   ),
                   [],
                   {
+                      ...(workerExecPath ? { execPath: workerExecPath } : {}),
                       env: {
                           ...process.env,
                           ORT_DISABLE_TELEMETRY: "1",
