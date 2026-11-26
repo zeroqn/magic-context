@@ -10,7 +10,6 @@ import {
 	TODO_PRIORITIES,
 	TODO_STATUSES,
 } from "@magic-context/core/hooks/magic-context/todo-view";
-import { canRenderPiRows, truncateToWidth } from "../pi-tui-compat";
 import { isBoundChild } from "../pi-registry";
 import {
 	decideTodoSettle,
@@ -21,6 +20,7 @@ import {
 	TODO_SETTLE_EVENT,
 	type TodoSettleEvent,
 } from "../pi-todo-settle";
+import { canRenderPiRows, truncateToWidth } from "../pi-tui-compat";
 
 export const TODO_TOOL_NAME = "todowrite";
 export const TODOS_COMMAND_NAME = "todos";
