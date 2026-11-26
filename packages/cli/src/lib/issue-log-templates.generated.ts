@@ -152,6 +152,7 @@ const TEMPLATE_DATA = [
 "[magic-context] git identity resolution is temporarily unavailable for \x01; reusing the last successful project identity from ancestor \x01 to avoid splitting project-scoped memory\x020p",
 "[magic-context] git identity resolution is temporarily unavailable for \x01; reusing the last successful project identity from ancestor \x01 to avoid splitting project-scoped memory",
 "transform: unknown provider usage; using wire estimate for priced pass inputTokens=\x01 percentage=\x01 trusted=\x01 wireTokens=\x01 pressureTokens=\x01 sizedPlan=clears_reasoning+covered_rows",
+"[magic-context] this host executable cannot run a script as the Bun CLI and no `bun` is on PATH; local embeddings cannot start. Set MAGIC_CONTEXT_BUN to the path of a Bun.",
 "ERROR: compaction marker read-back failed harness=\x01 compactionId=\x01 expectedFirstKept=\x01; further writes disabled for this session manager until restart; leaving marker pending",
 "transform: unknown provider usage; using wire estimate for priced pass inputTokens=\x01 percentage=\x01 trusted=\x01 wireTokens=\x01 pressureTokens=\x01 sizedPlan=keeps_reasoning+covered_rows",
 "[dreamer] map-memories safety override: memory_id=\x01 verdict=file-mapping replacement=independent mapping_origin=host_rejected_fallback reason=directive-shaped-project-rule",
