@@ -7,13 +7,13 @@ import { join } from "node:path";
 import { Database } from "../../shared/sqlite";
 import { closeQuietly } from "../../shared/sqlite-helpers";
 import { createTestTempDirFromPath } from "../../shared/test-temp-dir";
-import { __resetMountTableReaderForTests, __setMountTableReaderForTests } from "./wal-filesystem";
 import {
     __resetMmapSkipReportForTests,
     applySqliteTuningPragmas,
     initializeDatabase,
     setSqlitePragmaConfig,
 } from "./storage-db";
+import { __resetMountTableReaderForTests, __setMountTableReaderForTests } from "./wal-filesystem";
 
 // `sqlite.mmap_size_mb` maps the database file into the process. That needs the file to
 // behave like local memory, which is the same assumption `applyContextJournalMode` refuses
@@ -106,7 +106,10 @@ describe("sqlite tuning pragmas", () => {
             try {
                 initializeDatabase(db, 5000, dbPath);
                 expect(
-                    String((db.prepare("PRAGMA journal_mode").get() as Record<string, unknown>).journal_mode).toLowerCase(),
+                    String(
+                        (db.prepare("PRAGMA journal_mode").get() as Record<string, unknown>)
+                            .journal_mode,
+                    ).toLowerCase(),
                 ).toBe("delete");
                 expect(pragma(db, "mmap_size")).toBe(0);
                 // The tuning step runs before the handle is in `pathByDatabase`, so it has to
