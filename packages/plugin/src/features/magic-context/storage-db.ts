@@ -1026,6 +1026,14 @@ export function setSqlitePragmaConfig(config: { cacheSizeMb: number; mmapSizeMb:
     sqlitePragmaConfig = config;
 }
 
+/** Paths whose mmap opt-out this process has already logged, once each. */
+const reportedMmapSkip = new Set<string>();
+
+/** Test seam: forget the one-time mmap opt-out warnings, as a fresh process would. */
+export function __resetMmapSkipReportForTests(): void {
+    reportedMmapSkip.clear();
+}
+
 /**
  * Apply the tunable per-connection PRAGMAs (cache_size, mmap_size,
  * analysis_limit) from the current `sqlitePragmaConfig`. Idempotent and safe on
@@ -1033,10 +1041,31 @@ export function setSqlitePragmaConfig(config: { cacheSizeMb: number; mmapSizeMb:
  * so harnesses that open the DB before loading config (Pi) can call this once
  * config is available without reopening.
  */
-export function applySqliteTuningPragmas(db: Database): void {
+export function applySqliteTuningPragmas(db: Database, dbPath?: string): void {
     // cache_size negative value = KiB of page cache (e.g. -65536 = 64 MiB).
     db.exec(`PRAGMA cache_size=-${Math.round(sqlitePragmaConfig.cacheSizeMb * 1024)}`);
-    db.exec(`PRAGMA mmap_size=${Math.round(sqlitePragmaConfig.mmapSizeMb * 1024 * 1024)}`);
+    // A memory-mapped database needs the same coherence of the file that WAL needs of its
+    // `-shm`: a mapping shared across a VM boundary is not something this code can verify,
+    // and `applyContextJournalMode` already refuses WAL there for that reason. So mmap stays
+    // off on a WAL-unsafe mount, and is explicitly cleared rather than left to a compiled
+    // default, so a config change mid-session cannot leave an earlier mapping in place.
+    // The path is the one this handle was opened with (`pathByDatabase`), so the re-apply
+    // after config load is guarded too; a handle this module did not open keeps the old
+    // behaviour, since nothing can vouch for a path it was not given.
+    const resolvedPath = dbPath ?? getDatabasePath(db);
+    const unsafeFilesystem = resolvedPath === null ? null : detectWalUnsafeFilesystem(resolvedPath);
+    const mmapBytes = Math.round(sqlitePragmaConfig.mmapSizeMb * 1024 * 1024);
+    if (unsafeFilesystem === null || resolvedPath === null) {
+        db.exec(`PRAGMA mmap_size=${mmapBytes}`);
+    } else {
+        db.exec("PRAGMA mmap_size=0");
+        if (mmapBytes > 0 && !reportedMmapSkip.has(resolvedPath)) {
+            reportedMmapSkip.add(resolvedPath);
+            log(
+                `[magic-context] ${unsafeFilesystem} cannot be memory-mapped safely: ignoring sqlite.mmap_size_mb=${sqlitePragmaConfig.mmapSizeMb} for ${resolvedPath}`,
+            );
+        }
+    }
     // Bound any ANALYZE that a later PRAGMA optimize triggers on this connection.
     db.exec("PRAGMA analysis_limit=400");
 }
@@ -1275,7 +1304,10 @@ export function initializeDatabase(
     // CASCADE / SET NULL declared in the schema below and in migrations.
     db.exec("PRAGMA foreign_keys=ON");
     applyContextJournalMode(db, dbPath);
-    applySqliteTuningPragmas(db);
+    // The handle is not in `pathByDatabase` until this open finishes, so name the path here:
+    // that is what lets the tuning step tell a WAL-safe mount from the one the fallback above
+    // just moved to the rollback journal.
+    applySqliteTuningPragmas(db, dbPath);
     db.exec(`
     CREATE TABLE IF NOT EXISTS tags (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
