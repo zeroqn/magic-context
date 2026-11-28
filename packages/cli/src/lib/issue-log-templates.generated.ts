@@ -958,6 +958,7 @@ const TEMPLATE_DATA = [
 "DEGRADED PASS \x01: LKG unavailable (compaction_off); refusing unreduced \x01-message input",
 "channel2 ceiling nudge delivery skipped: claim no longer owned before send (state=\x01)",
 "[dreamer] retrospective: oversized timestamp cohort sessionIds=\x01 timestamp=\x01 skipped=\x01\x020s",
+"[magic-context] \x01 cannot be memory-mapped safely: ignoring sqlite.mmap_size_mb=\x01 for \x01\x022p",
 "[magic-context] embedding endpoint blocked: embedding endpoint is not a valid URL: \x01",
 "[session-projects] failed to make backfill lease retryable after discovery failed: \x01",
 "compaction-marker: removal failed during session cleanup, cleared persisted state: \x01",
